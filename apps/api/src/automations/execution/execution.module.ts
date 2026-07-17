@@ -1,0 +1,13 @@
+import { Module } from "@nestjs/common";
+import { ExecutionQueueModule } from "./execution-queue.module";
+import { ExecutionRunnerService } from "./execution-runner.service";
+import { ExecutionProcessor } from "./execution.processor";
+import { TriggerMatcherService } from "./trigger-matcher.service";
+import { ChannelsModule } from "../../channels/channels.module";
+
+@Module({
+  imports: [ExecutionQueueModule, ChannelsModule],
+  providers: [ExecutionRunnerService, ExecutionProcessor, TriggerMatcherService],
+  exports: [ExecutionRunnerService],
+})
+export class ExecutionModule {}

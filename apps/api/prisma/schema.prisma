@@ -1,0 +1,383 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  BUILDER
+  AGENT
+  ANALYST
+}
+
+enum ChannelProvider {
+  INSTAGRAM
+  MESSENGER
+}
+
+enum ChannelConnectionStatus {
+  PENDING
+  ACTIVE
+  DISCONNECTED
+  ERROR
+}
+
+enum CustomFieldType {
+  TEXT
+  NUMBER
+  BOOLEAN
+  DATE
+  DATETIME
+  EMAIL
+  PHONE
+  URL
+  ENUM
+  JSON
+}
+
+enum AutomationVersionStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum AutomationExecutionStatus {
+  QUEUED
+  RUNNING
+  WAITING
+  COMPLETED
+  FAILED_RETRYABLE
+  FAILED_PERMANENT
+  CANCELED
+}
+
+enum AutomationStepStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships WorkspaceMember[]
+  auditLogs   AuditLog[]
+
+  @@map("users")
+}
+
+model Workspace {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members            WorkspaceMember[]
+  invitations        WorkspaceInvitation[]
+  auditLogs          AuditLog[]
+  contacts           Contact[]
+  tags               Tag[]
+  customFieldDefs    CustomFieldDefinition[]
+  channelConnections ChannelConnection[]
+  inboundEvents      InboundEvent[]
+  outboxEvents       OutboxEvent[]
+  automations        Automation[]
+
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  id          String        @id @default(uuid())
+  workspaceId String
+  userId      String
+  role        WorkspaceRole
+  createdAt   DateTime      @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@map("workspace_members")
+}
+
+model WorkspaceInvitation {
+  id          String        @id @default(uuid())
+  workspaceId String
+  email       String
+  role        WorkspaceRole
+  token       String        @unique
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  createdAt   DateTime      @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, email])
+  @@map("workspace_invitations")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  workspaceId String?
+  actorUserId String?
+  action      String
+  targetType  String
+  targetId    String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actor     User?      @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@map("audit_logs")
+}
+
+model Contact {
+  id           String   @id @default(uuid())
+  workspaceId  String
+  firstName    String?
+  lastName     String?
+  primaryEmail String?
+  primaryPhone String?
+  locale       String?
+  timezone     String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workspace   Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  identities  ContactIdentity[]
+  tags        ContactTag[]
+  fieldValues CustomFieldValue[]
+  consents    ContactConsent[]
+  executions  AutomationExecution[]
+
+  @@index([workspaceId])
+  @@map("contacts")
+}
+
+model ContactIdentity {
+  id          String          @id @default(uuid())
+  contactId   String
+  workspaceId String
+  channel     ChannelProvider
+  externalId  String
+  displayName String?
+  rawProfile  Json?
+  createdAt   DateTime        @default(now())
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, channel, externalId])
+  @@map("contact_identities")
+}
+
+model Tag {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  createdAt   DateTime @default(now())
+
+  workspace Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contacts  ContactTag[]
+
+  @@unique([workspaceId, name])
+  @@map("tags")
+}
+
+model ContactTag {
+  contactId String
+  tagId     String
+  createdAt DateTime @default(now())
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  tag     Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([contactId, tagId])
+  @@map("contact_tags")
+}
+
+model CustomFieldDefinition {
+  id          String          @id @default(uuid())
+  workspaceId String
+  key         String
+  label       String
+  type        CustomFieldType
+  createdAt   DateTime        @default(now())
+
+  workspace Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  values    CustomFieldValue[]
+
+  @@unique([workspaceId, key])
+  @@map("custom_field_definitions")
+}
+
+model CustomFieldValue {
+  id                String    @id @default(uuid())
+  contactId         String
+  fieldDefinitionId String
+  valueText         String?
+  valueNumber       Float?
+  valueBoolean      Boolean?
+  valueDate         DateTime?
+  valueJson         Json?
+  updatedAt         DateTime  @updatedAt
+
+  contact         Contact               @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  fieldDefinition CustomFieldDefinition @relation(fields: [fieldDefinitionId], references: [id], onDelete: Cascade)
+
+  @@unique([contactId, fieldDefinitionId])
+  @@map("custom_field_values")
+}
+
+model ContactConsent {
+  id          String          @id @default(uuid())
+  contactId   String
+  workspaceId String
+  channel     ChannelProvider
+  purpose     String
+  source      String
+  consentText String?
+  grantedAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime        @default(now())
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([contactId])
+  @@map("contact_consents")
+}
+
+model ChannelConnection {
+  id                   String                  @id @default(uuid())
+  workspaceId          String
+  provider             ChannelProvider
+  externalAccountId    String
+  displayName          String?
+  credentialsEncrypted String
+  status               ChannelConnectionStatus @default(PENDING)
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
+
+  workspace     Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  inboundEvents InboundEvent[]
+  executions    AutomationExecution[]
+
+  @@unique([provider, externalAccountId])
+  @@map("channel_connections")
+}
+
+model InboundEvent {
+  id                  String          @id @default(uuid())
+  workspaceId         String
+  channelConnectionId String
+  provider            ChannelProvider
+  externalEventId     String
+  payloadHash         String
+  receivedAt          DateTime        @default(now())
+
+  workspace         Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  channelConnection ChannelConnection @relation(fields: [channelConnectionId], references: [id], onDelete: Cascade)
+
+  @@unique([channelConnectionId, externalEventId])
+  @@map("inbound_events")
+}
+
+model OutboxEvent {
+  id          String    @id @default(uuid())
+  workspaceId String
+  eventType   String
+  payload     Json
+  createdAt   DateTime  @default(now())
+  processedAt DateTime?
+  attempts    Int       @default(0)
+  lastError   String?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([processedAt, createdAt])
+  @@map("outbox_events")
+}
+
+model Automation {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  folderId    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  versions  AutomationVersion[]
+
+  @@index([workspaceId])
+  @@map("automations")
+}
+
+model AutomationVersion {
+  id            String                  @id @default(uuid())
+  automationId  String
+  versionNumber Int
+  status        AutomationVersionStatus @default(DRAFT)
+  graph         Json
+  publishedAt   DateTime?
+  createdAt     DateTime                @default(now())
+
+  automation Automation            @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  executions AutomationExecution[]
+
+  @@unique([automationId, versionNumber])
+  @@map("automation_versions")
+}
+
+model AutomationExecution {
+  id                  String                    @id @default(uuid())
+  automationVersionId String
+  workspaceId         String
+  contactId           String
+  channelConnectionId String
+  triggerEventId      String
+  status              AutomationExecutionStatus @default(QUEUED)
+  currentNodeId       String?
+  contextJson         Json                      @default("{}")
+  stepCount           Int                       @default(0)
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
+
+  automationVersion AutomationVersion         @relation(fields: [automationVersionId], references: [id], onDelete: Cascade)
+  contact           Contact                   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  channelConnection ChannelConnection         @relation(fields: [channelConnectionId], references: [id], onDelete: Cascade)
+  steps             AutomationStepExecution[]
+
+  @@unique([automationVersionId, contactId, triggerEventId])
+  @@index([status])
+  @@map("automation_executions")
+}
+
+model AutomationStepExecution {
+  id          String               @id @default(uuid())
+  executionId String
+  nodeId      String
+  status      AutomationStepStatus
+  input       Json?
+  output      Json?
+  error       String?
+  startedAt   DateTime             @default(now())
+  finishedAt  DateTime?
+
+  execution AutomationExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+
+  @@index([executionId])
+  @@map("automation_step_executions")
+}

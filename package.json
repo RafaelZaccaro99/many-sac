@@ -1,0 +1,13 @@
+{
+  "name": "many-zac",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run start:dev -w apps/api",
+    "build:api": "npm run build -w apps/api",
+    "test:api": "npm run test -w apps/api",
+    "lint:api": "npm run lint -w apps/api"
+  }
+}

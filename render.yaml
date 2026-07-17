@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: many-zac-api
+    runtime: node
+    plan: free
+    rootDir: .
+    buildCommand: npm install && npx prisma generate --schema apps/api/prisma/schema.prisma && npm run build -w apps/api
+    startCommand: npm run -w apps/api prisma:migrate:deploy && npm run -w apps/api start:prod
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_EXPIRES_IN
+        value: 1d
+      - key: CREDENTIALS_ENCRYPTION_KEY
+        sync: false
+      - key: META_APP_SECRET
+        sync: false
+      - key: META_WEBHOOK_VERIFY_TOKEN
+        sync: false
+      - key: NODE_ENV
+        value: production
+
+# O frontend (apps/web) é implantado na Vercel, não aqui - ver a seção "Deploy" do README.md.
