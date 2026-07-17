@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: free
     rootDir: .
-    buildCommand: npm install && npx prisma generate --schema apps/api/prisma/schema.prisma && npm run build -w apps/api
+    buildCommand: npm install --include=dev && npx prisma generate --schema apps/api/prisma/schema.prisma && npm run build -w apps/api
     startCommand: npm run -w apps/api prisma:migrate:deploy && npm run -w apps/api start:prod
     healthCheckPath: /health
     envVars:
