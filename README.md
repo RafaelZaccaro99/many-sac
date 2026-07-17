@@ -45,7 +45,10 @@ Next.js vai na **Vercel**, que tem suporte nativo a Next.js e é mais simples pr
 
 ### 1. Bancos gerenciados (fora do Render, para não misturar com o compute)
 
-- Postgres: [neon.tech](https://neon.tech) (tier gratuito permanente) — copie a `DATABASE_URL`.
+- Postgres: [neon.tech](https://neon.tech) ou [supabase.com](https://supabase.com) (ambos com tier
+  gratuito permanente) — copie a `DATABASE_URL`. No Supabase, use a **conexão direta** (porta `5432`,
+  não a "Transaction pooler" na `6543`) — a API roda como processo único sempre ligado no Render, não
+  precisa de pooler, e `prisma migrate deploy` funciona melhor direto.
 - Redis: [upstash.com](https://upstash.com) (tier gratuito permanente) — copie a `REDIS_URL`
   (use a versão `rediss://` com TLS).
 
@@ -62,7 +65,7 @@ Next.js vai na **Vercel**, que tem suporte nativo a Next.js e é mais simples pr
 
    | Variável | Valor |
    |---|---|
-   | `DATABASE_URL` | a do Neon |
+   | `DATABASE_URL` | a do Neon/Supabase |
    | `REDIS_URL` | a do Upstash |
    | `JWT_SECRET` | gere com `openssl rand -base64 48` |
    | `CREDENTIALS_ENCRYPTION_KEY` | gere com `openssl rand -base64 32` |
@@ -70,7 +73,7 @@ Next.js vai na **Vercel**, que tem suporte nativo a Next.js e é mais simples pr
    | `META_WEBHOOK_VERIFY_TOKEN` | qualquer string aleatória sua, ex: `openssl rand -hex 16` |
 
 3. Deploy dispara sozinho. O `startCommand` já roda `prisma migrate deploy` antes de subir, então as
-   tabelas são criadas automaticamente no Neon no primeiro deploy.
+   tabelas são criadas automaticamente no banco no primeiro deploy.
 4. Anote a URL pública que o Render deu (ex: `https://many-zac-api.onrender.com`).
 
 ### 4. Frontend na Vercel
