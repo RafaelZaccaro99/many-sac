@@ -112,11 +112,48 @@ export function validateGraph(graph: AutomationGraph, context: GraphValidationCo
       }
     }
 
-    if (nodeOutgoing.length === 0 && node.type !== AutomationNodeType.END && node.type !== AutomationNodeType.HUMAN_HANDOFF) {
+    if (node.type === AutomationNodeType.ACTION) {
+      issues.push(...validateActionNode(node));
+    }
+
+    if (node.type === AutomationNodeType.START_ANOTHER_FLOW) {
+      const automationId = node.data?.automationId;
+      if (typeof automationId !== "string" || automationId.length === 0) {
+        issues.push({ code: "START_ANOTHER_FLOW_MISSING_TARGET", message: "A start_another_flow node needs a target automationId", nodeId: node.id });
+      }
+    }
+
+    if (nodeOutgoing.length === 0 && node.type !== AutomationNodeType.END) {
       issues.push({ code: "DEAD_END", message: `Node ${node.id} has no outgoing edge and no explicit end`, nodeId: node.id });
     }
 
     issues.push(...validateVariableReferences(node, context));
+  }
+
+  return issues;
+}
+
+const ACTION_TYPES_REQUIRING_TAG = new Set(["add_tag", "remove_tag"]);
+
+function validateActionNode(node: AutomationGraphNode): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  const actionType = node.data?.actionType;
+
+  if (typeof actionType !== "string" || !["add_tag", "remove_tag", "set_field"].includes(actionType)) {
+    issues.push({
+      code: "ACTION_MISSING_TYPE",
+      message: 'An action node needs actionType "add_tag", "remove_tag", or "set_field"',
+      nodeId: node.id,
+    });
+    return issues;
+  }
+
+  if (ACTION_TYPES_REQUIRING_TAG.has(actionType) && typeof node.data?.tag !== "string") {
+    issues.push({ code: "ACTION_MISSING_TAG", message: `Action "${actionType}" needs a tag name`, nodeId: node.id });
+  }
+
+  if (actionType === "set_field" && typeof node.data?.key !== "string") {
+    issues.push({ code: "ACTION_MISSING_FIELD_KEY", message: 'Action "set_field" needs a field key', nodeId: node.id });
   }
 
   return issues;

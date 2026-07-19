@@ -4,9 +4,11 @@ import { ExecutionRunnerService } from "./execution-runner.service";
 import { ExecutionProcessor } from "./execution.processor";
 import { TriggerMatcherService } from "./trigger-matcher.service";
 import { ChannelsModule } from "../../channels/channels.module";
+import { ConversationsModule } from "../../conversations/conversations.module";
+import { PolicyModule } from "../../policy/policy.module";
 
 @Module({
-  imports: [ExecutionQueueModule, ChannelsModule],
+  imports: [ExecutionQueueModule, ChannelsModule, ConversationsModule, PolicyModule],
   providers: [ExecutionRunnerService, ExecutionProcessor, TriggerMatcherService],
   exports: [ExecutionRunnerService],
 })

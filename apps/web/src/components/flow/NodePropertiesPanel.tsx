@@ -4,6 +4,7 @@ import { Node } from "reactflow";
 import { AutomationNodeData } from "./AutomationNode";
 
 const OPERATORS = ["equals", "not_equals", "contains", "not_contains", "greater_than", "less_than", "exists", "not_exists"];
+const ACTION_TYPES = ["add_tag", "remove_tag", "set_field"];
 
 export function NodePropertiesPanel({
   node,
@@ -88,6 +89,76 @@ export function NodePropertiesPanel({
             className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
             value={(fields.durationMs as number) ?? 0}
             onChange={(e) => onChange({ ...fields, durationMs: Number(e.target.value) })}
+          />
+        </Field>
+      )}
+
+      {nodeType === "action" && (
+        <>
+          <Field label="Tipo de ação">
+            <select
+              className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
+              value={(fields.actionType as string) ?? "add_tag"}
+              onChange={(e) => onChange({ ...fields, actionType: e.target.value })}
+            >
+              {ACTION_TYPES.map((type) => (
+                <option key={type} value={type}>
+                  {type}
+                </option>
+              ))}
+            </select>
+          </Field>
+          {(fields.actionType === "remove_tag" || fields.actionType === undefined || fields.actionType === "add_tag") && (
+            <Field label="Tag">
+              <input
+                className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
+                value={(fields.tag as string) ?? ""}
+                onChange={(e) => onChange({ ...fields, tag: e.target.value })}
+                placeholder="vip"
+              />
+            </Field>
+          )}
+          {fields.actionType === "set_field" && (
+            <>
+              <Field label="Chave do campo personalizado">
+                <input
+                  className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
+                  value={(fields.key as string) ?? ""}
+                  onChange={(e) => onChange({ ...fields, key: e.target.value })}
+                  placeholder="produto_interesse"
+                />
+              </Field>
+              <Field label="Valor">
+                <input
+                  className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
+                  value={(fields.value as string) ?? ""}
+                  onChange={(e) => onChange({ ...fields, value: e.target.value })}
+                  placeholder="Ola {{contact.first_name}}"
+                />
+              </Field>
+            </>
+          )}
+        </>
+      )}
+
+      {nodeType === "goal" && (
+        <Field label="Nome da meta">
+          <input
+            className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
+            value={(fields.name as string) ?? ""}
+            onChange={(e) => onChange({ ...fields, name: e.target.value })}
+            placeholder="signup_concluido"
+          />
+        </Field>
+      )}
+
+      {nodeType === "start_another_flow" && (
+        <Field label="ID da automação alvo">
+          <input
+            className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
+            value={(fields.automationId as string) ?? ""}
+            onChange={(e) => onChange({ ...fields, automationId: e.target.value })}
+            placeholder="cole o ID de outra automação publicada"
           />
         </Field>
       )}

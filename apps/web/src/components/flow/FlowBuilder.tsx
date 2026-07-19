@@ -45,6 +45,9 @@ const PALETTE: { type: string; label: string }[] = [
   { type: "condition", label: "+ Condição" },
   { type: "delay", label: "+ Espera" },
   { type: "human_handoff", label: "+ Atendimento humano" },
+  { type: "action", label: "+ Ação" },
+  { type: "goal", label: "+ Meta" },
+  { type: "start_another_flow", label: "+ Iniciar outro fluxo" },
   { type: "end", label: "+ Fim" },
 ];
 
@@ -247,6 +250,12 @@ function defaultFieldsFor(type: string): Record<string, unknown> {
       return { field: "contact.first_name", operator: "exists" };
     case "delay":
       return { durationMs: 60000 };
+    case "action":
+      return { actionType: "add_tag", tag: "" };
+    case "goal":
+      return { name: "" };
+    case "start_another_flow":
+      return { automationId: "" };
     default:
       return {};
   }

@@ -11,6 +11,8 @@ import { ChannelsModule } from "./channels/channels.module";
 import { EventsModule } from "./events/events.module";
 import { AutomationsModule } from "./automations/automations.module";
 import { ExecutionModule } from "./automations/execution/execution.module";
+import { ConversationsModule } from "./conversations/conversations.module";
+import { PolicyModule } from "./policy/policy.module";
 
 @Module({
   imports: [
@@ -23,6 +25,8 @@ import { ExecutionModule } from "./automations/execution/execution.module";
     ContactsModule,
     ChannelsModule,
     EventsModule,
+    PolicyModule,
+    ConversationsModule,
     AutomationsModule,
     ExecutionModule,
   ],

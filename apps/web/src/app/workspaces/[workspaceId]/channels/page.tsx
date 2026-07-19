@@ -18,9 +18,14 @@ export default async function ChannelsPage({ params }: { params: { workspaceId: 
     <main className="mx-auto max-w-2xl p-8">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-xl font-semibold">Canais</h1>
-        <Link href={`/workspaces/${params.workspaceId}/automations`} className="text-sm text-slate-500 hover:text-slate-800">
-          ← automações
-        </Link>
+        <div className="flex items-center gap-4">
+          <Link href={`/workspaces/${params.workspaceId}/inbox`} className="text-sm text-slate-500 hover:text-slate-800">
+            Inbox
+          </Link>
+          <Link href={`/workspaces/${params.workspaceId}/automations`} className="text-sm text-slate-500 hover:text-slate-800">
+            ← automações
+          </Link>
+        </div>
       </div>
 
       <div className="mb-8">

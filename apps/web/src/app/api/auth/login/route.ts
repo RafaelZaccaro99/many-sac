@@ -8,7 +8,9 @@ export async function POST(request: NextRequest) {
   const response = await fetch(`${apiUrl()}/auth/${mode}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: body.email, password: body.password, name: body.name }),
+    body: JSON.stringify(
+      mode === "signup" ? { email: body.email, password: body.password, name: body.name } : { email: body.email, password: body.password },
+    ),
   });
 
   const data = await response.json();

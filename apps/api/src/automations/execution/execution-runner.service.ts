@@ -1,13 +1,16 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { AutomationExecutionStatus, AutomationStepStatus, ChannelProvider, Prisma } from "@prisma/client";
+import { AutomationExecutionStatus, AutomationStepStatus, AutomationVersionStatus, ChannelProvider, Prisma } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { CredentialsCipher } from "../../channels/credentials-cipher";
 import { MetaAdapter } from "../../channels/adapters/meta/meta.adapter";
+import { ConversationsService } from "../../conversations/conversations.service";
+import { PolicyService } from "../../policy/policy.service";
+import { POLICY_DENIAL_MESSAGES } from "../../policy/policy.types";
 import { ExecutionQueueService } from "./execution-queue.service";
 import { AutomationGraph, AutomationGraphNode, AutomationNodeType } from "../graph.types";
 import { renderTemplate, VariableContext } from "./variable-resolver";
 import { evaluateCondition, ConditionData } from "./condition-evaluator";
-import { decodeCustomFieldValue } from "../../contacts/custom-field-coercion";
+import { coerceCustomFieldValue, decodeCustomFieldValue } from "../../contacts/custom-field-coercion";
 
 export const MAX_STEPS_PER_EXECUTION = 50;
 
@@ -36,6 +39,8 @@ export class ExecutionRunnerService {
     private readonly credentialsCipher: CredentialsCipher,
     private readonly metaAdapter: MetaAdapter,
     private readonly executionQueue: ExecutionQueueService,
+    private readonly conversationsService: ConversationsService,
+    private readonly policyService: PolicyService,
   ) {}
 
   async runStep(executionId: string): Promise<void> {
@@ -111,13 +116,19 @@ export class ExecutionRunnerService {
         return;
 
       case AutomationNodeType.HUMAN_HANDOFF:
-        // Conversation/Inbox model lands in a later milestone; for now the
-        // execution simply pauses here rather than pretending to hand off.
-        await this.recordStep(executionId, node.id, AutomationStepStatus.COMPLETED, undefined, undefined);
-        await this.prisma.automationExecution.update({
-          where: { id: executionId },
-          data: { status: AutomationExecutionStatus.WAITING },
-        });
+        await this.runHumanHandoff(execution, node, nextEdge);
+        return;
+
+      case AutomationNodeType.GOAL:
+        await this.runGoal(executionId, node, nextEdge);
+        return;
+
+      case AutomationNodeType.ACTION:
+        await this.runAction(execution, node, varContext, nextEdge);
+        return;
+
+      case AutomationNodeType.START_ANOTHER_FLOW:
+        await this.runStartAnotherFlow(execution, node, nextEdge);
         return;
 
       default:
@@ -133,6 +144,13 @@ export class ExecutionRunnerService {
     nextEdge: AutomationGraph["edges"][number] | undefined,
   ): Promise<void> {
     const text = typeof node.data.text === "string" ? renderTemplate(node.data.text, varContext) : undefined;
+
+    const decision = await this.policyService.canSend(execution.contactId, execution.channelConnectionId, execution.channelConnection.provider);
+    if (!decision.allowed) {
+      // Not retryable: backoff won't reopen a messaging window or undo an opt-out.
+      await this.failPermanently(execution.id, node.id, POLICY_DENIAL_MESSAGES[decision.reasonCode!]);
+      return;
+    }
 
     try {
       const recipientExternalId = await this.resolveRecipientExternalId(execution);
@@ -202,6 +220,195 @@ export class ExecutionRunnerService {
       data: { status: AutomationExecutionStatus.WAITING, currentNodeId: nextEdge.target },
     });
     await this.executionQueue.enqueueStep(executionId, durationMs);
+  }
+
+  /**
+   * Opens (or reuses) a Conversation for a human to pick up in the Inbox, and
+   * parks the execution WAITING at the node after human_handoff - mirroring
+   * runDelay's approach of pre-advancing currentNodeId - so that resuming it
+   * later is just "flip status back to QUEUED and enqueue", the same as any
+   * other resumed step.
+   */
+  private async runHumanHandoff(
+    execution: LoadedExecution,
+    node: AutomationGraphNode,
+    nextEdge: AutomationGraph["edges"][number] | undefined,
+  ): Promise<void> {
+    if (!nextEdge) {
+      await this.failPermanently(execution.id, node.id, "human_handoff node has no outgoing edge");
+      return;
+    }
+
+    const conversationId = await this.conversationsService.openForHandoff(
+      execution.workspaceId,
+      execution.contactId,
+      execution.channelConnectionId,
+    );
+
+    await this.recordStep(execution.id, node.id, AutomationStepStatus.COMPLETED, undefined, undefined);
+    await this.prisma.automationExecution.update({
+      where: { id: execution.id },
+      data: { status: AutomationExecutionStatus.WAITING, currentNodeId: nextEdge.target, conversationId },
+    });
+  }
+
+  /** Pure marker/analytics node - has no side effect beyond recording that the contact reached it. */
+  private async runGoal(executionId: string, node: AutomationGraphNode, nextEdge: AutomationGraph["edges"][number] | undefined): Promise<void> {
+    const name = typeof node.data.name === "string" ? node.data.name : undefined;
+    await this.recordStep(executionId, node.id, AutomationStepStatus.COMPLETED, { name }, undefined);
+    await this.advance(executionId, nextEdge?.target ?? null);
+  }
+
+  private async runAction(
+    execution: LoadedExecution,
+    node: AutomationGraphNode,
+    varContext: VariableContext,
+    nextEdge: AutomationGraph["edges"][number] | undefined,
+  ): Promise<void> {
+    const actionType = node.data.actionType;
+
+    try {
+      switch (actionType) {
+        case "add_tag":
+          await this.runAddTag(execution, node);
+          break;
+        case "remove_tag":
+          await this.runRemoveTag(execution, node);
+          break;
+        case "set_field":
+          await this.runSetField(execution, node, varContext);
+          break;
+        default:
+          await this.failPermanently(execution.id, node.id, `action node has unsupported actionType "${String(actionType)}"`);
+          return;
+      }
+    } catch (err: any) {
+      // Misconfiguration (unknown tag/field, bad value type) - not retryable.
+      await this.failPermanently(execution.id, node.id, err?.message ?? String(err));
+      return;
+    }
+
+    await this.recordStep(execution.id, node.id, AutomationStepStatus.COMPLETED, { actionType }, undefined);
+    await this.advance(execution.id, nextEdge?.target ?? null);
+  }
+
+  private async runAddTag(execution: LoadedExecution, node: AutomationGraphNode): Promise<void> {
+    const tagName = node.data.tag;
+    if (typeof tagName !== "string" || !tagName) {
+      throw new Error("add_tag action needs a tag name");
+    }
+    const tag = await this.prisma.tag.findUnique({ where: { workspaceId_name: { workspaceId: execution.workspaceId, name: tagName } } });
+    if (!tag) {
+      throw new Error(`Tag "${tagName}" does not exist in this workspace`);
+    }
+    await this.prisma.contactTag.upsert({
+      where: { contactId_tagId: { contactId: execution.contactId, tagId: tag.id } },
+      create: { contactId: execution.contactId, tagId: tag.id },
+      update: {},
+    });
+  }
+
+  private async runRemoveTag(execution: LoadedExecution, node: AutomationGraphNode): Promise<void> {
+    const tagName = node.data.tag;
+    if (typeof tagName !== "string" || !tagName) {
+      throw new Error("remove_tag action needs a tag name");
+    }
+    const tag = await this.prisma.tag.findUnique({ where: { workspaceId_name: { workspaceId: execution.workspaceId, name: tagName } } });
+    if (!tag) {
+      return; // Nothing to remove.
+    }
+    await this.prisma.contactTag.deleteMany({ where: { contactId: execution.contactId, tagId: tag.id } });
+  }
+
+  private async runSetField(execution: LoadedExecution, node: AutomationGraphNode, varContext: VariableContext): Promise<void> {
+    const key = node.data.key;
+    if (typeof key !== "string" || !key) {
+      throw new Error("set_field action needs a field key");
+    }
+    const definition = await this.prisma.customFieldDefinition.findUnique({
+      where: { workspaceId_key: { workspaceId: execution.workspaceId, key } },
+    });
+    if (!definition) {
+      throw new Error(`Custom field "${key}" is not defined in this workspace`);
+    }
+
+    const rawValue = typeof node.data.value === "string" ? renderTemplate(node.data.value, varContext) : node.data.value;
+    const coerced = coerceCustomFieldValue(definition.type, rawValue);
+
+    await this.prisma.customFieldValue.upsert({
+      where: { contactId_fieldDefinitionId: { contactId: execution.contactId, fieldDefinitionId: definition.id } },
+      create: { contactId: execution.contactId, fieldDefinitionId: definition.id, ...coerced },
+      update: coerced,
+    });
+  }
+
+  /**
+   * Fire-and-forget: spawns a new AutomationExecution for another published
+   * automation against the same contact, then immediately advances past this
+   * node - it does not wait for the spawned flow to finish. Deduped on
+   * (automationVersionId, contactId, triggerEventId) like any other execution,
+   * using a key tied to this exact step so a retried job never double-spawns.
+   */
+  private async runStartAnotherFlow(
+    execution: LoadedExecution,
+    node: AutomationGraphNode,
+    nextEdge: AutomationGraph["edges"][number] | undefined,
+  ): Promise<void> {
+    const targetAutomationId = node.data.automationId;
+    if (typeof targetAutomationId !== "string" || !targetAutomationId) {
+      await this.failPermanently(execution.id, node.id, "start_another_flow node needs a target automationId");
+      return;
+    }
+    if (targetAutomationId === execution.automationVersion.automationId) {
+      // Guards the direct self-loop; an indirect cycle (A -> B -> A) is not detected.
+      await this.failPermanently(execution.id, node.id, "start_another_flow cannot target its own automation");
+      return;
+    }
+
+    const targetVersion = await this.prisma.automationVersion.findFirst({
+      where: {
+        automationId: targetAutomationId,
+        status: AutomationVersionStatus.PUBLISHED,
+        automation: { workspaceId: execution.workspaceId },
+      },
+    });
+    if (!targetVersion) {
+      await this.failPermanently(execution.id, node.id, `Automation ${targetAutomationId} has no published version in this workspace`);
+      return;
+    }
+
+    const targetGraph = targetVersion.graph as unknown as AutomationGraph;
+    const triggerNode = targetGraph.nodes.find((n) => n.type === AutomationNodeType.TRIGGER);
+    const firstEdge = triggerNode ? targetGraph.edges.find((e) => e.source === triggerNode.id) : undefined;
+    if (!triggerNode || !firstEdge) {
+      await this.failPermanently(execution.id, node.id, `Target automation ${targetAutomationId} has no usable trigger`);
+      return;
+    }
+
+    let spawnedExecutionId: string | null = null;
+    try {
+      const spawned = await this.prisma.automationExecution.create({
+        data: {
+          automationVersionId: targetVersion.id,
+          workspaceId: execution.workspaceId,
+          contactId: execution.contactId,
+          channelConnectionId: execution.channelConnectionId,
+          triggerEventId: `start_another_flow:${execution.id}:${node.id}`,
+          status: AutomationExecutionStatus.QUEUED,
+          currentNodeId: firstEdge.target,
+        },
+      });
+      spawnedExecutionId = spawned.id;
+      await this.executionQueue.enqueueStep(spawned.id, 0);
+    } catch (err: any) {
+      if (err?.code !== "P2002") {
+        throw err;
+      }
+      // Already spawned by a prior attempt at this exact step - idempotent no-op.
+    }
+
+    await this.recordStep(execution.id, node.id, AutomationStepStatus.COMPLETED, { targetAutomationId, spawnedExecutionId }, undefined);
+    await this.advance(execution.id, nextEdge?.target ?? null);
   }
 
   private async advance(executionId: string, nextNodeId: string | null): Promise<void> {

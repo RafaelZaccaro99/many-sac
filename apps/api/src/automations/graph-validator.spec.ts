@@ -137,15 +137,21 @@ describe("validateGraph", () => {
     expect(codes(graph)).toContain("DEAD_END");
   });
 
-  it("allows a human_handoff node with no outgoing edge (execution pauses there)", () => {
-    const graph: AutomationGraph = {
+  it("requires a human_handoff node to have an outgoing edge - the runtime resumes execution from there", () => {
+    const withoutEdge: AutomationGraph = {
       nodes: [
         { id: "t1", type: AutomationNodeType.TRIGGER, data: {} },
         { id: "h1", type: AutomationNodeType.HUMAN_HANDOFF, data: {} },
       ],
       edges: [{ id: "e-t1-h1", source: "t1", target: "h1" }],
     };
-    expect(codes(graph)).not.toContain("DEAD_END");
+    expect(codes(withoutEdge)).toContain("DEAD_END");
+
+    const withEdge: AutomationGraph = {
+      nodes: [...withoutEdge.nodes, { id: "e1", type: AutomationNodeType.END, data: {} }],
+      edges: [...withoutEdge.edges, { id: "e-h1-e1", source: "h1", target: "e1" }],
+    };
+    expect(codes(withEdge)).not.toContain("DEAD_END");
   });
 
   it("rejects an edge referencing an unknown node", () => {
@@ -177,6 +183,69 @@ describe("validateGraph", () => {
       ),
     };
     expect(codes(invalidGraph)).toContain("UNKNOWN_VARIABLE");
+  });
+
+  it("requires an action node to declare a valid actionType", () => {
+    const graph: AutomationGraph = {
+      nodes: [
+        { id: "t1", type: AutomationNodeType.TRIGGER, data: {} },
+        { id: "a1", type: AutomationNodeType.ACTION, data: {} },
+        { id: "e1", type: AutomationNodeType.END, data: {} },
+      ],
+      edges: [
+        { id: "e-t1-a1", source: "t1", target: "a1" },
+        { id: "e-a1-e1", source: "a1", target: "e1" },
+      ],
+    };
+    expect(codes(graph)).toContain("ACTION_MISSING_TYPE");
+  });
+
+  it("requires add_tag/remove_tag actions to declare a tag, and set_field to declare a key", () => {
+    const base: AutomationGraph = {
+      nodes: [
+        { id: "t1", type: AutomationNodeType.TRIGGER, data: {} },
+        { id: "a1", type: AutomationNodeType.ACTION, data: { actionType: "add_tag" } },
+        { id: "e1", type: AutomationNodeType.END, data: {} },
+      ],
+      edges: [
+        { id: "e-t1-a1", source: "t1", target: "a1" },
+        { id: "e-a1-e1", source: "a1", target: "e1" },
+      ],
+    };
+    expect(codes(base)).toContain("ACTION_MISSING_TAG");
+
+    const withTag: AutomationGraph = {
+      ...base,
+      nodes: base.nodes.map((n) => (n.id === "a1" ? { ...n, data: { actionType: "add_tag", tag: "vip" } } : n)),
+    };
+    expect(codes(withTag)).not.toContain("ACTION_MISSING_TAG");
+
+    const setField: AutomationGraph = {
+      ...base,
+      nodes: base.nodes.map((n) => (n.id === "a1" ? { ...n, data: { actionType: "set_field" } } : n)),
+    };
+    expect(codes(setField)).toContain("ACTION_MISSING_FIELD_KEY");
+  });
+
+  it("requires a start_another_flow node to declare a target automationId", () => {
+    const graph: AutomationGraph = {
+      nodes: [
+        { id: "t1", type: AutomationNodeType.TRIGGER, data: {} },
+        { id: "s1", type: AutomationNodeType.START_ANOTHER_FLOW, data: {} },
+        { id: "e1", type: AutomationNodeType.END, data: {} },
+      ],
+      edges: [
+        { id: "e-t1-s1", source: "t1", target: "s1" },
+        { id: "e-s1-e1", source: "s1", target: "e1" },
+      ],
+    };
+    expect(codes(graph)).toContain("START_ANOTHER_FLOW_MISSING_TARGET");
+
+    const withTarget: AutomationGraph = {
+      ...graph,
+      nodes: graph.nodes.map((n) => (n.id === "s1" ? { ...n, data: { automationId: "auto-123" } } : n)),
+    };
+    expect(codes(withTarget)).not.toContain("START_ANOTHER_FLOW_MISSING_TARGET");
   });
 
   it("rejects a reference to a completely unknown variable namespace", () => {

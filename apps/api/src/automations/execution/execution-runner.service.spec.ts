@@ -11,7 +11,10 @@ const BASE_GRAPH = {
     { id: "e1", type: AutomationNodeType.END, data: {} },
     { id: "e2", type: AutomationNodeType.END, data: {} },
     { id: "h1", type: AutomationNodeType.HUMAN_HANDOFF, data: {} },
-    { id: "a1", type: AutomationNodeType.ACTION, data: {} },
+    { id: "a1", type: AutomationNodeType.ACTION, data: { actionType: "add_tag", tag: "vip" } },
+    { id: "g1", type: AutomationNodeType.GOAL, data: { name: "signup_started" } },
+    { id: "s1", type: AutomationNodeType.START_ANOTHER_FLOW, data: { automationId: "auto-other" } },
+    { id: "ci1", type: AutomationNodeType.COLLECT_INPUT, data: {} },
   ],
   edges: [
     { id: "e-t1-m1", source: "t1", target: "m1" },
@@ -19,7 +22,10 @@ const BASE_GRAPH = {
     { id: "e-c1-true", source: "c1", target: "e1", sourceHandle: "true" },
     { id: "e-c1-false", source: "c1", target: "d1", sourceHandle: "false" },
     { id: "e-d1-e2", source: "d1", target: "e2" },
-    { id: "e-e1-nothing", source: "e1", target: "h1" }, // never taken; e1 has no outgoing edge processed
+    { id: "e-h1-e2", source: "h1", target: "e2" },
+    { id: "e-a1-e2", source: "a1", target: "e2" },
+    { id: "e-g1-e2", source: "g1", target: "e2" },
+    { id: "e-s1-e2", source: "s1", target: "e2" },
   ],
 };
 
@@ -34,7 +40,7 @@ function buildRunner(overrides: Partial<any> = {}) {
     status: AutomationExecutionStatus.QUEUED,
     currentNodeId: "m1",
     stepCount: 0,
-    automationVersion: { graph: BASE_GRAPH },
+    automationVersion: { graph: BASE_GRAPH, automationId: "auto-self" },
     contact: { firstName: "Ana", lastName: null, primaryEmail: null, primaryPhone: null, fieldValues: [] },
     channelConnection: { provider: ChannelProvider.INSTAGRAM, externalAccountId: "page-123", credentialsEncrypted: "enc-token" },
     ...overrides,
@@ -51,6 +57,7 @@ function buildRunner(overrides: Partial<any> = {}) {
         Object.assign(execution, data);
         return execution;
       }),
+      create: jest.fn().mockImplementation(async ({ data }: any) => ({ id: "spawned-exec-1", ...data })),
     },
     automationStepExecution: {
       create: jest.fn().mockImplementation(async ({ data }: any) => {
@@ -64,14 +71,36 @@ function buildRunner(overrides: Partial<any> = {}) {
     workspace: {
       findUniqueOrThrow: jest.fn().mockResolvedValue({ name: "Acme" }),
     },
+    tag: {
+      findUnique: jest.fn().mockResolvedValue({ id: "tag-1", name: "vip" }),
+    },
+    contactTag: {
+      upsert: jest.fn().mockResolvedValue(undefined),
+      deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
+    customFieldDefinition: {
+      findUnique: jest.fn().mockResolvedValue({ id: "field-1", key: "plan", type: "TEXT" }),
+    },
+    customFieldValue: {
+      upsert: jest.fn().mockResolvedValue(undefined),
+    },
+    automationVersion: {
+      findFirst: jest.fn().mockResolvedValue({
+        id: "other-ver-1",
+        automationId: "auto-other",
+        graph: { nodes: [{ id: "ot1", type: AutomationNodeType.TRIGGER, data: {} }], edges: [{ id: "e-ot1-oe1", source: "ot1", target: "oe1" }] },
+      }),
+    },
   } as any;
 
   const credentialsCipher = { decrypt: jest.fn().mockReturnValue("decrypted-token") } as any;
   const metaAdapter = { sendMessage: jest.fn().mockResolvedValue({ providerMessageId: "mid-1", status: "sent" }) } as any;
   const executionQueue = { enqueueStep: jest.fn().mockResolvedValue(undefined) } as any;
+  const conversationsService = { openForHandoff: jest.fn().mockResolvedValue("conv-1") } as any;
+  const policyService = { canSend: jest.fn().mockResolvedValue({ allowed: true, reasonCode: null }) } as any;
 
-  const runner = new ExecutionRunnerService(prisma, credentialsCipher, metaAdapter, executionQueue);
-  return { runner, prisma, credentialsCipher, metaAdapter, executionQueue, execution, stepExecutions, updateCalls };
+  const runner = new ExecutionRunnerService(prisma, credentialsCipher, metaAdapter, executionQueue, conversationsService, policyService);
+  return { runner, prisma, credentialsCipher, metaAdapter, executionQueue, conversationsService, policyService, execution, stepExecutions, updateCalls };
 }
 
 describe("ExecutionRunnerService.runStep", () => {
@@ -85,6 +114,8 @@ describe("ExecutionRunnerService.runStep", () => {
     const { runner } = buildRunner();
     const runnerNoExec = new ExecutionRunnerService(
       { automationExecution: { findUnique: jest.fn().mockResolvedValue(null) } } as any,
+      {} as any,
+      {} as any,
       {} as any,
       {} as any,
       {} as any,
@@ -105,6 +136,18 @@ describe("ExecutionRunnerService.runStep", () => {
     expect(stepExecutions.at(-1)).toMatchObject({ nodeId: "m1", status: AutomationStepStatus.COMPLETED });
     expect(updateCalls.at(-1)).toMatchObject({ status: AutomationExecutionStatus.QUEUED, currentNodeId: "c1" });
     expect(executionQueue.enqueueStep).toHaveBeenCalledWith("exec-1", 0);
+  });
+
+  it("fails permanently without retrying when the Policy Engine denies the send", async () => {
+    const { runner, metaAdapter, executionQueue, policyService, updateCalls } = buildRunner();
+    policyService.canSend.mockResolvedValue({ allowed: false, reasonCode: "OPTED_OUT" });
+
+    await runner.runStep("exec-1");
+
+    expect(policyService.canSend).toHaveBeenCalledWith("contact-1", "conn-1", ChannelProvider.INSTAGRAM);
+    expect(metaAdapter.sendMessage).not.toHaveBeenCalled();
+    expect(updateCalls.at(-1)).toMatchObject({ status: AutomationExecutionStatus.FAILED_PERMANENT });
+    expect(executionQueue.enqueueStep).not.toHaveBeenCalled();
   });
 
   it("marks FAILED_RETRYABLE and rethrows when sending the message fails, so BullMQ retries", async () => {
@@ -171,21 +214,182 @@ describe("ExecutionRunnerService.runStep", () => {
     expect(executionQueue.enqueueStep).not.toHaveBeenCalled();
   });
 
-  it("pauses at a human_handoff node without enqueuing further work", async () => {
-    const { runner, updateCalls, executionQueue } = buildRunner({ currentNodeId: "h1" });
+  it("opens a conversation and pauses at the node after human_handoff, without enqueuing further work", async () => {
+    const { runner, updateCalls, executionQueue, conversationsService } = buildRunner({ currentNodeId: "h1" });
 
     await runner.runStep("exec-1");
 
-    expect(updateCalls.at(-1)).toMatchObject({ status: AutomationExecutionStatus.WAITING });
+    expect(conversationsService.openForHandoff).toHaveBeenCalledWith("ws-1", "contact-1", "conn-1");
+    expect(updateCalls.at(-1)).toMatchObject({
+      status: AutomationExecutionStatus.WAITING,
+      currentNodeId: "e2",
+      conversationId: "conv-1",
+    });
     expect(executionQueue.enqueueStep).not.toHaveBeenCalled();
   });
 
-  it("fails permanently for a node type the runtime doesn't support yet", async () => {
-    const { runner, updateCalls } = buildRunner({ currentNodeId: "a1" });
+  it("fails permanently when a human_handoff node has no outgoing edge", async () => {
+    const brokenGraph = {
+      nodes: BASE_GRAPH.nodes,
+      edges: BASE_GRAPH.edges.filter((e) => e.source !== "h1"),
+    };
+    const { runner, updateCalls, conversationsService } = buildRunner({
+      currentNodeId: "h1",
+      automationVersion: { graph: brokenGraph },
+    });
 
     await runner.runStep("exec-1");
 
     expect(updateCalls.at(-1)).toMatchObject({ status: AutomationExecutionStatus.FAILED_PERMANENT });
+    expect(conversationsService.openForHandoff).not.toHaveBeenCalled();
+  });
+
+  it("fails permanently for a node type the runtime doesn't support yet", async () => {
+    const { runner, updateCalls } = buildRunner({ currentNodeId: "ci1" });
+
+    await runner.runStep("exec-1");
+
+    expect(updateCalls.at(-1)).toMatchObject({ status: AutomationExecutionStatus.FAILED_PERMANENT });
+  });
+
+  describe("action node", () => {
+    it("adds a tag to the contact and advances", async () => {
+      const { runner, prisma, updateCalls, stepExecutions } = buildRunner({ currentNodeId: "a1" });
+
+      await runner.runStep("exec-1");
+
+      expect(prisma.tag.findUnique).toHaveBeenCalledWith({ where: { workspaceId_name: { workspaceId: "ws-1", name: "vip" } } });
+      expect(prisma.contactTag.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ create: { contactId: "contact-1", tagId: "tag-1" } }),
+      );
+      expect(stepExecutions.at(-1)).toMatchObject({ nodeId: "a1", status: AutomationStepStatus.COMPLETED });
+      expect(updateCalls.at(-1)).toMatchObject({ status: AutomationExecutionStatus.QUEUED, currentNodeId: "e2" });
+    });
+
+    it("fails permanently when add_tag references a tag that doesn't exist", async () => {
+      const { runner, prisma, updateCalls } = buildRunner({ currentNodeId: "a1" });
+      prisma.tag.findUnique.mockResolvedValue(null);
+
+      await runner.runStep("exec-1");
+
+      expect(updateCalls.at(-1)).toMatchObject({ status: AutomationExecutionStatus.FAILED_PERMANENT });
+      expect(prisma.contactTag.upsert).not.toHaveBeenCalled();
+    });
+
+    it("removes a tag from the contact, tolerating a tag that no longer exists", async () => {
+      const removeGraph = {
+        nodes: BASE_GRAPH.nodes.map((n) => (n.id === "a1" ? { ...n, data: { actionType: "remove_tag", tag: "vip" } } : n)),
+        edges: BASE_GRAPH.edges,
+      };
+      const { runner, prisma, updateCalls } = buildRunner({ currentNodeId: "a1", automationVersion: { graph: removeGraph, automationId: "auto-self" } });
+      prisma.tag.findUnique.mockResolvedValue(null);
+
+      await runner.runStep("exec-1");
+
+      expect(prisma.contactTag.deleteMany).not.toHaveBeenCalled();
+      expect(updateCalls.at(-1)).toMatchObject({ status: AutomationExecutionStatus.QUEUED, currentNodeId: "e2" });
+    });
+
+    it("coerces and sets a custom field value, rendering variables in a string value", async () => {
+      const setFieldGraph = {
+        nodes: BASE_GRAPH.nodes.map((n) =>
+          n.id === "a1" ? { ...n, data: { actionType: "set_field", key: "plan", value: "{{contact.first_name}}-plan" } } : n,
+        ),
+        edges: BASE_GRAPH.edges,
+      };
+      const { runner, prisma, updateCalls } = buildRunner({
+        currentNodeId: "a1",
+        automationVersion: { graph: setFieldGraph, automationId: "auto-self" },
+      });
+
+      await runner.runStep("exec-1");
+
+      expect(prisma.customFieldValue.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ create: expect.objectContaining({ valueText: "Ana-plan" }) }),
+      );
+      expect(updateCalls.at(-1)).toMatchObject({ status: AutomationExecutionStatus.QUEUED, currentNodeId: "e2" });
+    });
+
+    it("fails permanently for an unknown actionType", async () => {
+      const badGraph = {
+        nodes: BASE_GRAPH.nodes.map((n) => (n.id === "a1" ? { ...n, data: { actionType: "delete_contact" } } : n)),
+        edges: BASE_GRAPH.edges,
+      };
+      const { runner, updateCalls } = buildRunner({ currentNodeId: "a1", automationVersion: { graph: badGraph, automationId: "auto-self" } });
+
+      await runner.runStep("exec-1");
+
+      expect(updateCalls.at(-1)).toMatchObject({ status: AutomationExecutionStatus.FAILED_PERMANENT });
+    });
+  });
+
+  describe("goal node", () => {
+    it("records reaching the goal and advances, without any side effect", async () => {
+      const { runner, updateCalls, stepExecutions } = buildRunner({ currentNodeId: "g1" });
+
+      await runner.runStep("exec-1");
+
+      expect(stepExecutions.at(-1)).toMatchObject({ nodeId: "g1", status: AutomationStepStatus.COMPLETED, input: { name: "signup_started" } });
+      expect(updateCalls.at(-1)).toMatchObject({ status: AutomationExecutionStatus.QUEUED, currentNodeId: "e2" });
+    });
+  });
+
+  describe("start_another_flow node", () => {
+    it("spawns an execution for the target automation's published trigger and advances past itself", async () => {
+      const { runner, prisma, executionQueue, updateCalls, stepExecutions } = buildRunner({ currentNodeId: "s1" });
+
+      await runner.runStep("exec-1");
+
+      expect(prisma.automationVersion.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ automationId: "auto-other" }) }),
+      );
+      expect(prisma.automationExecution.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            automationVersionId: "other-ver-1",
+            contactId: "contact-1",
+            currentNodeId: "oe1",
+            triggerEventId: "start_another_flow:exec-1:s1",
+          }),
+        }),
+      );
+      expect(executionQueue.enqueueStep).toHaveBeenCalledWith("spawned-exec-1", 0);
+      expect(stepExecutions.at(-1)).toMatchObject({ nodeId: "s1", status: AutomationStepStatus.COMPLETED });
+      expect(updateCalls.at(-1)).toMatchObject({ status: AutomationExecutionStatus.QUEUED, currentNodeId: "e2" });
+    });
+
+    it("fails permanently instead of spawning when the target automation is the same one currently running", async () => {
+      const selfGraph = {
+        nodes: BASE_GRAPH.nodes.map((n) => (n.id === "s1" ? { ...n, data: { automationId: "auto-self" } } : n)),
+        edges: BASE_GRAPH.edges,
+      };
+      const { runner, prisma, updateCalls } = buildRunner({ currentNodeId: "s1", automationVersion: { graph: selfGraph, automationId: "auto-self" } });
+
+      await runner.runStep("exec-1");
+
+      expect(prisma.automationExecution.create).not.toHaveBeenCalled();
+      expect(updateCalls.at(-1)).toMatchObject({ status: AutomationExecutionStatus.FAILED_PERMANENT });
+    });
+
+    it("fails permanently when the target automation has no published version", async () => {
+      const { runner, prisma, updateCalls } = buildRunner({ currentNodeId: "s1" });
+      prisma.automationVersion.findFirst.mockResolvedValue(null);
+
+      await runner.runStep("exec-1");
+
+      expect(updateCalls.at(-1)).toMatchObject({ status: AutomationExecutionStatus.FAILED_PERMANENT });
+    });
+
+    it("treats a duplicate spawn (unique constraint) as an idempotent no-op and still advances", async () => {
+      const { runner, prisma, updateCalls } = buildRunner({ currentNodeId: "s1" });
+      const conflict: any = new Error("duplicate");
+      conflict.code = "P2002";
+      prisma.automationExecution.create.mockRejectedValue(conflict);
+
+      await runner.runStep("exec-1");
+
+      expect(updateCalls.at(-1)).toMatchObject({ status: AutomationExecutionStatus.QUEUED, currentNodeId: "e2" });
+    });
   });
 
   it("fails permanently once the step limit is exceeded, without touching the queue", async () => {

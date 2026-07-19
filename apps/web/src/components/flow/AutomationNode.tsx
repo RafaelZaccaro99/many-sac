@@ -9,6 +9,9 @@ const NODE_STYLES: Record<string, { label: string; color: string }> = {
   delay: { label: "Espera", color: "bg-violet-100 border-violet-400" },
   end: { label: "Fim", color: "bg-slate-200 border-slate-400" },
   human_handoff: { label: "Atendimento humano", color: "bg-rose-100 border-rose-400" },
+  action: { label: "Ação", color: "bg-orange-100 border-orange-400" },
+  goal: { label: "Meta", color: "bg-teal-100 border-teal-400" },
+  start_another_flow: { label: "Iniciar outro fluxo", color: "bg-indigo-100 border-indigo-400" },
 };
 
 export interface AutomationNodeData {
@@ -16,11 +19,18 @@ export interface AutomationNodeData {
   fields: Record<string, unknown>;
 }
 
+function actionSummary(fields: Record<string, unknown>): string {
+  if (fields.actionType === "add_tag") return `+ tag: ${fields.tag ?? ""}`;
+  if (fields.actionType === "remove_tag") return `- tag: ${fields.tag ?? ""}`;
+  if (fields.actionType === "set_field") return `campo ${fields.key ?? ""} = ${fields.value ?? ""}`;
+  return String(fields.actionType);
+}
+
 export function AutomationNode({ data, selected }: NodeProps<AutomationNodeData>) {
   const style = NODE_STYLES[data.nodeType] ?? { label: data.nodeType, color: "bg-white border-slate-300" };
   const isCondition = data.nodeType === "condition";
   const isTrigger = data.nodeType === "trigger";
-  const isEnd = data.nodeType === "end" || data.nodeType === "human_handoff";
+  const isEnd = data.nodeType === "end";
 
   return (
     <div
@@ -35,6 +45,11 @@ export function AutomationNode({ data, selected }: NodeProps<AutomationNodeData>
         {typeof data.fields?.keyword === "string" && `palavra-chave: ${data.fields.keyword}`}
         {typeof data.fields?.durationMs === "number" && `${data.fields.durationMs}ms`}
         {isCondition && typeof data.fields?.field === "string" && `${data.fields.field} ${data.fields.operator ?? ""}`}
+        {data.nodeType === "action" && typeof data.fields?.actionType === "string" && actionSummary(data.fields)}
+        {data.nodeType === "goal" && typeof data.fields?.name === "string" && data.fields.name}
+        {data.nodeType === "start_another_flow" &&
+          typeof data.fields?.automationId === "string" &&
+          `automação: ${data.fields.automationId}`}
       </div>
 
       {isCondition ? (

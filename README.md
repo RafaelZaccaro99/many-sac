@@ -110,7 +110,7 @@ npm run lint:api
 npm run build:api
 ```
 
-## O que já funciona (M0-M7)
+## O que já funciona (M0-M9)
 
 - Signup / login (JWT) — `POST /auth/signup`, `POST /auth/login`, `GET /auth/me`
 - Workspaces multiempresa com papéis Owner/Admin/Builder/Agent/Analyst, convites, troca de papel e remoção de membro — `POST/GET /workspaces`, `/workspaces/:id/members`, `/workspaces/:id/invitations`
@@ -125,13 +125,19 @@ npm run build:api
 - Motor de execução: um contato manda mensagem → o gatilho casa com uma automação publicada → o runtime processa trigger → mensagem → condição → delay → fim, com retry/backoff e dead-letter queue via BullMQ — `apps/api/src/automations/execution/`
 - Flow Builder visual (`apps/web`): login/cadastro com sessão em cookie httpOnly, lista de workspaces, lista de automações, e o construtor de fluxo em si (React Flow) com paleta de nós, painel de propriedades por tipo de nó, salvar rascunho, validar (mostra erros reais do backend) e publicar — tudo direto contra a API real, sem mock
 - Tela de "Canais" para conectar um canal colando o ID da Page/conta e o access token, sem precisar chamar a API na mão
+- Inbox (`apps/web`, `/workspaces/:id/inbox`): lista de conversas com filtro por status, thread com histórico de mensagens (contato/bot/atendente), resposta manual (chama a Graph API de verdade, igual ao runtime), e ações "Assumir", "Devolver para o bot" e "Fechar" — tudo direto contra a API real (`apps/api/src/conversations/`)
+- Handoff humano de verdade: o nó `human_handoff` abre (ou reaproveita) uma `Conversation` de verdade e pausa a `AutomationExecution` esperando um agente; "Devolver para o bot" retoma a execução exatamente de onde parou, reenfileirando o job no BullMQ — `POST /workspaces/:id/conversations/:conversationId/resume`
+- Policy Engine (`apps/api/src/policy/`): `PolicyService.canSend` bloqueia de verdade um envio — automático (runtime) ou manual (Inbox) — fora da janela de 24h, com consentimento `purpose="messaging"` revogado, ou depois de um opt-out; ponto único de decisão, não duplicado por caminho de envio
+- Opt-out/opt-in por palavra-chave: uma mensagem como "parar"/"sair"/"stop" marca o contato como opted-out e cancela toda automação em andamento para ele; "voltar"/"iniciar"/"start" reabre
+- Nós `action` (`add_tag`/`remove_tag`/`set_field`), `goal` (marcador/analytics) e `start_another_flow` (dispara outra automação publicada para o mesmo contato, fire-and-forget) agora funcionam no runtime e têm paleta + painel de propriedades no Flow Builder
 - Deploy pronto para produção via [render.yaml](render.yaml) (ver seção Deploy abaixo) — necessário para testar com um número/conta real, já que a Meta não chama `localhost`
 
 ## O que ainda não existe (não alegar pronto)
 
-- Inbox, Policy Engine (M8-M9)
-- `human_handoff` só pausa a execução (`WAITING`); não existe Conversation/Inbox para retomá-la ainda (chega no M8)
-- Nós `action`, `collect_input`, `start_another_flow`, `external_request` e `goal` são rejeitados pelo runtime como "não suportado ainda" — só `trigger`/`send_message`/`condition`/`delay`/`end`/`human_handoff` funcionam, e o Flow Builder só oferece esses na paleta
+- Nós `collect_input` e `external_request` continuam rejeitados pelo runtime como "não suportado ainda" — o primeiro depende de uma forma de "esperar a próxima mensagem do contato"; o segundo precisa de allow-list de domínio e timeout antes de fazer uma chamada HTTP arbitrária a partir do runtime (risco de SSRF se feito sem isso)
+- `start_another_flow` só impede o caso mais óbvio de auto-loop (uma automação apontando direto para si mesma); um ciclo indireto (A inicia B, B inicia A) não é detectado e pode gerar execuções em cascata
+- Uma nova mensagem do contato pode disparar uma automação nova mesmo enquanto a conversa está em atendimento humano (`HUMAN`/`WAITING_HUMAN`) — o `TriggerMatcherService` ainda não considera o status da conversa antes de abrir uma nova execução (o `send_message` dessa nova execução seria bloqueado pelo Policy Engine só se o contato tiver de fato opinado out — não é um gate específico para "está em atendimento humano")
+- Sem observabilidade dedicada ainda (M10): logs estruturados, métricas de fila/DLQ e um `/health` de verdade para produção
 - `MetaAdapter.sendMessage` chama a Graph API real e já foi confirmado conversando de fato com `graph.facebook.com` (ver validação abaixo) — falta apenas testar com credenciais de um app Meta aprovado em vez de um token fake, para confirmar um envio bem-sucedido de ponta a ponta
 - O Flow Builder não tem posicionamento automático de nós (arrastar manualmente é necessário) nem atalhos de teclado; é funcional, não polido
 
@@ -156,9 +162,45 @@ login → criar workspace → criar automação → montar o grafo no canvas (ar
 "Grafo válido" → "Publicar" criou a versão 1 de verdade no Postgres. Nenhuma camada mockada, do clique
 no navegador até a linha gravada no banco.
 
+**M8 (Inbox + handoff humano) validado do mesmo jeito** (2026-07-19): publiquei uma automação com
+`trigger → human_handoff → end`, mandei um webhook assinado de verdade — a automação rodou, criou uma
+`Conversation` real em `WAITING_HUMAN` e a execução ficou `WAITING` no Postgres. No Inbox pelo navegador
+(login → workspace → Inbox): "Assumir" mudou o status para `HUMAN` de verdade; a resposta manual chamou
+`graph.facebook.com` de verdade e mostrou o 401 esperado (token de teste); "Fechar" marcou a conversa
+como `CLOSED`. Via API, `resume` reenfileirou a `AutomationExecution` no BullMQ e ela completou
+(`COMPLETED`) — confirmando que o "devolver para o bot" retoma o grafo de onde parou, não só limpa o
+status.
+
+**M9 (Policy Engine) validado contra a mesma infraestrutura real** (2026-07-19): publiquei uma automação
+`trigger → send_message → end`, mandei um webhook assinado de um contato novo — o Policy Engine deixou
+passar (janela recém-aberta) e o `send_message` chegou a bater de verdade em `graph.facebook.com` (5
+tentativas, 401 esperado, `FAILED_PERMANENT`). Mandar "PARAR" do mesmo contato: `optedOutAt` foi
+gravado, a execução `WAITING` de um handoff anterior foi cancelada (`CANCELED`), e a automação disparada
+pela própria mensagem "PARAR" falhou permanentemente em **1 passo** (não 5 tentativas) com "Contact has
+opted out of messaging" — provando que o bloqueio aconteceu antes de qualquer chamada de rede, não
+depois de uma falha da Meta. Mandar "voltar" limpou `optedOutAt`. No Inbox: resposta manual funcionou
+normalmente dentro da janela; atrasando manualmente a última mensagem `IN` no Postgres para 25h atrás,
+a mesma resposta voltou um 403 "24-hour messaging window is closed for this contact"; revogando um
+`ContactConsent` com `purpose="messaging"` via `POST /contacts/:id/consents/:id/revoke`, voltou um 403
+"Contact has revoked messaging consent".
+
+**Nós `action`/`goal`/`start_another_flow` validados contra a mesma infraestrutura real** (2026-07-19):
+publiquei uma automação `trigger → action(add_tag "vip") → goal → start_another_flow(Policy test flow) →
+end` e mandei um webhook de verdade. No Postgres: o contato realmente ganhou a tag `vip`
+(`contact_tags`), o passo do `goal` foi registrado com seu nome, e o passo do `start_another_flow`
+gravou o `spawnedExecutionId` de uma nova `AutomationExecution` de verdade para a automação alvo — que
+por sua vez chegou a tentar `graph.facebook.com` de verdade no seu próprio `send_message`. A execução
+principal terminou `COMPLETED` com os 4 passos registrados em ordem. No Flow Builder, adicionei o nó de
+Ação pela paleta, editei tipo/tag no painel de propriedades, e "Validar" retornou os erros reais do
+`graph-validator` (nó não alcançável / sem aresta de saída) contra a API real antes de eu conectar as
+arestas — confirmando que a validação nova (`ACTION_MISSING_TYPE`, `ACTION_MISSING_TAG`,
+`START_ANOTHER_FLOW_MISSING_TARGET`) está mesmo no caminho do backend, não só no tipo TypeScript do
+frontend.
+
 ## Limitações conhecidas
 
 - Sem OAuth real com a Meta: conexão de canal é manual (`POST /workspaces/:id/channels`), recebendo um token que você já obteve fora do fluxo. Isso é aceitável para provar o adapter e o webhook, mas não é o fluxo de conexão final.
 - Sem exclusão de workspace (ação exclusiva do Owner) — deliberadamente fora de escopo por ser uma operação destrutiva; entra num marco dedicado com soft-delete/anonimização.
 - Sem paginação por cursor em `GET /contacts` (usa offset/limit) — trocar antes de ter volume real de contatos.
 - Retry de `send_message` pode reenviar uma mensagem que na verdade já saiu (se a falha ocorreu depois do envio mas antes de registrar sucesso) — semântica "at least once" reconhecida, sem idempotency key do lado da Meta ainda.
+- Uma falha da Graph API na resposta manual do Inbox (`POST .../conversations/:id/messages`) sobe como 500 genérico — não há um exception filter traduzindo o erro do adapter para um 4xx/5xx específico; o texto digitado não é perdido (fica no campo), mas a mensagem de erro não diz "a Meta recusou o envio". Mesmo padrão já existia no runtime (o job só reflete "falhou", sem detalhar por quê, fora do log).
