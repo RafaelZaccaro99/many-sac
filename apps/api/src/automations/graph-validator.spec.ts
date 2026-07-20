@@ -248,6 +248,90 @@ describe("validateGraph", () => {
     expect(codes(withTarget)).not.toContain("START_ANOTHER_FLOW_MISSING_TARGET");
   });
 
+  it("requires a collect_input node to declare a valid variableName", () => {
+    const base: AutomationGraph = {
+      nodes: [
+        { id: "t1", type: AutomationNodeType.TRIGGER, data: {} },
+        { id: "ci1", type: AutomationNodeType.COLLECT_INPUT, data: {} },
+        { id: "e1", type: AutomationNodeType.END, data: {} },
+      ],
+      edges: [
+        { id: "e-t1-ci1", source: "t1", target: "ci1" },
+        { id: "e-ci1-e1", source: "ci1", target: "e1" },
+      ],
+    };
+    expect(codes(base)).toContain("COLLECT_INPUT_MISSING_VARIABLE");
+
+    const invalidName: AutomationGraph = {
+      ...base,
+      nodes: base.nodes.map((n) => (n.id === "ci1" ? { ...n, data: { variableName: "not valid!" } } : n)),
+    };
+    expect(codes(invalidName)).toContain("COLLECT_INPUT_MISSING_VARIABLE");
+
+    const withName: AutomationGraph = {
+      ...base,
+      nodes: base.nodes.map((n) => (n.id === "ci1" ? { ...n, data: { variableName: "favorite_color" } } : n)),
+    };
+    expect(codes(withName)).not.toContain("COLLECT_INPUT_MISSING_VARIABLE");
+  });
+
+  it("accepts a reference to a flow variable declared by a collect_input node, rejects an undeclared one", () => {
+    const graph: AutomationGraph = {
+      nodes: [
+        { id: "t1", type: AutomationNodeType.TRIGGER, data: {} },
+        { id: "ci1", type: AutomationNodeType.COLLECT_INPUT, data: { variableName: "favorite_color" } },
+        { id: "m1", type: AutomationNodeType.SEND_MESSAGE, data: { text: "You picked {{flow.favorite_color}}!" } },
+        { id: "e1", type: AutomationNodeType.END, data: {} },
+      ],
+      edges: [
+        { id: "e-t1-ci1", source: "t1", target: "ci1" },
+        { id: "e-ci1-m1", source: "ci1", target: "m1" },
+        { id: "e-m1-e1", source: "m1", target: "e1" },
+      ],
+    };
+    expect(codes(graph)).not.toContain("UNKNOWN_VARIABLE");
+
+    const typo: AutomationGraph = {
+      ...graph,
+      nodes: graph.nodes.map((n) => (n.id === "m1" ? { ...n, data: { text: "{{flow.favorite_colour}}" } } : n)),
+    };
+    expect(codes(typo)).toContain("UNKNOWN_VARIABLE");
+  });
+
+  it("requires an external_request node to declare an https url and a valid method", () => {
+    const base: AutomationGraph = {
+      nodes: [
+        { id: "t1", type: AutomationNodeType.TRIGGER, data: {} },
+        { id: "x1", type: AutomationNodeType.EXTERNAL_REQUEST, data: {} },
+        { id: "e1", type: AutomationNodeType.END, data: {} },
+      ],
+      edges: [
+        { id: "e-t1-x1", source: "t1", target: "x1" },
+        { id: "e-x1-e1", source: "x1", target: "e1" },
+      ],
+    };
+    expect(codes(base)).toContain("EXTERNAL_REQUEST_INVALID_URL");
+
+    const httpUrl: AutomationGraph = {
+      ...base,
+      nodes: base.nodes.map((n) => (n.id === "x1" ? { ...n, data: { url: "http://insecure.example.com" } } : n)),
+    };
+    expect(codes(httpUrl)).toContain("EXTERNAL_REQUEST_INVALID_URL");
+
+    const badMethod: AutomationGraph = {
+      ...base,
+      nodes: base.nodes.map((n) => (n.id === "x1" ? { ...n, data: { url: "https://api.example.com", method: "CONNECT" } } : n)),
+    };
+    expect(codes(badMethod)).toContain("EXTERNAL_REQUEST_INVALID_METHOD");
+
+    const valid: AutomationGraph = {
+      ...base,
+      nodes: base.nodes.map((n) => (n.id === "x1" ? { ...n, data: { url: "https://api.example.com", method: "post" } } : n)),
+    };
+    expect(codes(valid)).not.toContain("EXTERNAL_REQUEST_INVALID_URL");
+    expect(codes(valid)).not.toContain("EXTERNAL_REQUEST_INVALID_METHOD");
+  });
+
   it("rejects a reference to a completely unknown variable namespace", () => {
     const graph: AutomationGraph = {
       nodes: [

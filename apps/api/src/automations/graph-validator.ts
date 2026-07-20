@@ -23,6 +23,7 @@ const BUILT_IN_VARIABLES = new Set([
 
 const VARIABLE_PATTERN = /\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g;
 const CUSTOM_FIELD_PREFIX = "contact.custom.";
+const FLOW_VARIABLE_PREFIX = "flow.";
 
 /**
  * Structural + semantic validation for a draft automation graph, run before a
@@ -94,6 +95,13 @@ export function validateGraph(graph: AutomationGraph, context: GraphValidationCo
     issues.push({ code: "CYCLE_DETECTED", message: `Cycle detected involving node ${cycleNodeId}`, nodeId: cycleNodeId });
   }
 
+  const flowVariableNames = new Set(
+    graph.nodes
+      .filter((n) => n.type === AutomationNodeType.COLLECT_INPUT)
+      .map((n) => n.data?.variableName)
+      .filter((name): name is string => typeof name === "string"),
+  );
+
   for (const node of graph.nodes) {
     const nodeOutgoing = outgoing.get(node.id) ?? [];
 
@@ -123,11 +131,48 @@ export function validateGraph(graph: AutomationGraph, context: GraphValidationCo
       }
     }
 
+    if (node.type === AutomationNodeType.COLLECT_INPUT) {
+      const variableName = node.data?.variableName;
+      if (typeof variableName !== "string" || !VARIABLE_NAME_PATTERN.test(variableName)) {
+        issues.push({
+          code: "COLLECT_INPUT_MISSING_VARIABLE",
+          message: "A collect_input node needs a variableName (letters, numbers, underscore)",
+          nodeId: node.id,
+        });
+      }
+    }
+
+    if (node.type === AutomationNodeType.EXTERNAL_REQUEST) {
+      issues.push(...validateExternalRequestNode(node));
+    }
+
     if (nodeOutgoing.length === 0 && node.type !== AutomationNodeType.END) {
       issues.push({ code: "DEAD_END", message: `Node ${node.id} has no outgoing edge and no explicit end`, nodeId: node.id });
     }
 
-    issues.push(...validateVariableReferences(node, context));
+    issues.push(...validateVariableReferences(node, context, flowVariableNames));
+  }
+
+  return issues;
+}
+
+const VARIABLE_NAME_PATTERN = /^[a-zA-Z0-9_]+$/;
+const ALLOWED_EXTERNAL_REQUEST_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
+
+function validateExternalRequestNode(node: AutomationGraphNode): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  const url = node.data?.url;
+  if (typeof url !== "string" || !url.startsWith("https://")) {
+    issues.push({ code: "EXTERNAL_REQUEST_INVALID_URL", message: "An external_request node needs an https:// url", nodeId: node.id });
+  }
+
+  const method = node.data?.method;
+  if (method !== undefined && (typeof method !== "string" || !ALLOWED_EXTERNAL_REQUEST_METHODS.has(method.toUpperCase()))) {
+    issues.push({
+      code: "EXTERNAL_REQUEST_INVALID_METHOD",
+      message: "An external_request node's method must be GET, POST, PUT, PATCH, or DELETE",
+      nodeId: node.id,
+    });
   }
 
   return issues;
@@ -159,9 +204,15 @@ function validateActionNode(node: AutomationGraphNode): ValidationIssue[] {
   return issues;
 }
 
-function validateVariableReferences(node: AutomationGraphNode, context: GraphValidationContext): ValidationIssue[] {
+function validateVariableReferences(
+  node: AutomationGraphNode,
+  context: GraphValidationContext,
+  flowVariableNames: Set<string>,
+): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
-  const textFields = [node.data?.text, node.data?.expression].filter((v): v is string => typeof v === "string");
+  const textFields = [node.data?.text, node.data?.expression, node.data?.value].filter(
+    (v): v is string => typeof v === "string",
+  );
 
   for (const text of textFields) {
     for (const match of text.matchAll(VARIABLE_PATTERN)) {
@@ -173,6 +224,17 @@ function validateVariableReferences(node: AutomationGraphNode, context: GraphVal
           issues.push({
             code: "UNKNOWN_VARIABLE",
             message: `Node ${node.id} references undefined custom field "${key}"`,
+            nodeId: node.id,
+          });
+        }
+        continue;
+      }
+      if (variable.startsWith(FLOW_VARIABLE_PREFIX)) {
+        const key = variable.slice(FLOW_VARIABLE_PREFIX.length);
+        if (!flowVariableNames.has(key)) {
+          issues.push({
+            code: "UNKNOWN_VARIABLE",
+            message: `Node ${node.id} references flow variable "${key}" which no collect_input node in this graph declares`,
             nodeId: node.id,
           });
         }

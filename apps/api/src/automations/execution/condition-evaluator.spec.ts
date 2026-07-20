@@ -5,6 +5,7 @@ const ctx: VariableContext = {
   contact: { firstName: "Ana", lastName: null, primaryEmail: "ana@example.com", primaryPhone: null },
   workspaceName: "Acme",
   customFieldValues: { score: 42, plan: "pro" },
+  flowVariables: {},
 };
 
 describe("evaluateCondition", () => {

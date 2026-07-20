@@ -12,6 +12,8 @@ const NODE_STYLES: Record<string, { label: string; color: string }> = {
   action: { label: "Ação", color: "bg-orange-100 border-orange-400" },
   goal: { label: "Meta", color: "bg-teal-100 border-teal-400" },
   start_another_flow: { label: "Iniciar outro fluxo", color: "bg-indigo-100 border-indigo-400" },
+  collect_input: { label: "Coletar resposta", color: "bg-cyan-100 border-cyan-400" },
+  external_request: { label: "Chamada externa", color: "bg-fuchsia-100 border-fuchsia-400" },
 };
 
 export interface AutomationNodeData {
@@ -50,6 +52,10 @@ export function AutomationNode({ data, selected }: NodeProps<AutomationNodeData>
         {data.nodeType === "start_another_flow" &&
           typeof data.fields?.automationId === "string" &&
           `automação: ${data.fields.automationId}`}
+        {data.nodeType === "collect_input" && typeof data.fields?.variableName === "string" && `variável: ${data.fields.variableName}`}
+        {data.nodeType === "external_request" &&
+          typeof data.fields?.url === "string" &&
+          `${String(data.fields.method ?? "GET").toUpperCase()} ${data.fields.url}`}
       </div>
 
       {isCondition ? (

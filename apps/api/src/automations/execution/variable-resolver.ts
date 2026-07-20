@@ -8,10 +8,13 @@ export interface VariableContext {
   workspaceName: string;
   assigneeName?: string | null;
   customFieldValues: Record<string, unknown>;
+  /** Values collected mid-flow by collect_input nodes, keyed by their variableName. */
+  flowVariables: Record<string, unknown>;
 }
 
 const VARIABLE_PATTERN = /\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g;
 const CUSTOM_FIELD_PREFIX = "contact.custom.";
+const FLOW_VARIABLE_PREFIX = "flow.";
 
 /**
  * Resolves a single `{{...}}` variable path to its raw value (not stringified) -
@@ -36,6 +39,10 @@ export function resolveVariableValue(path: string, ctx: VariableContext): unknow
       if (path.startsWith(CUSTOM_FIELD_PREFIX)) {
         const key = path.slice(CUSTOM_FIELD_PREFIX.length);
         return ctx.customFieldValues[key] ?? null;
+      }
+      if (path.startsWith(FLOW_VARIABLE_PREFIX)) {
+        const key = path.slice(FLOW_VARIABLE_PREFIX.length);
+        return ctx.flowVariables[key] ?? null;
       }
       return undefined;
   }

@@ -48,6 +48,8 @@ const PALETTE: { type: string; label: string }[] = [
   { type: "action", label: "+ Ação" },
   { type: "goal", label: "+ Meta" },
   { type: "start_another_flow", label: "+ Iniciar outro fluxo" },
+  { type: "collect_input", label: "+ Coletar resposta" },
+  { type: "external_request", label: "+ Chamada externa" },
   { type: "end", label: "+ Fim" },
 ];
 
@@ -256,6 +258,10 @@ function defaultFieldsFor(type: string): Record<string, unknown> {
       return { name: "" };
     case "start_another_flow":
       return { automationId: "" };
+    case "collect_input":
+      return { variableName: "" };
+    case "external_request":
+      return { url: "", method: "GET" };
     default:
       return {};
   }

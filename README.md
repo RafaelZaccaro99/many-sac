@@ -1,7 +1,8 @@
 # Many Zac
 
 Plataforma SaaS de automação conversacional omnichannel (marketing, atendimento e vendas).
-Monólito modular: API em NestJS + PostgreSQL + Redis. Ver `docs/ROADMAP.md` para o plano de marcos.
+Monólito modular: API em NestJS + PostgreSQL + Redis. Ver `docs/ROADMAP.md` para o plano de marcos e
+`docs/NEXT_STEPS.md` para o que falta e o que só você pode fazer (contas/credenciais externas).
 
 ## Stack
 
@@ -110,7 +111,7 @@ npm run lint:api
 npm run build:api
 ```
 
-## O que já funciona (M0-M9)
+## O que já funciona (M0-M9 + todos os tipos de nó do runtime)
 
 - Signup / login (JWT) — `POST /auth/signup`, `POST /auth/login`, `GET /auth/me`
 - Workspaces multiempresa com papéis Owner/Admin/Builder/Agent/Analyst, convites, troca de papel e remoção de membro — `POST/GET /workspaces`, `/workspaces/:id/members`, `/workspaces/:id/invitations`
@@ -130,12 +131,15 @@ npm run build:api
 - Policy Engine (`apps/api/src/policy/`): `PolicyService.canSend` bloqueia de verdade um envio — automático (runtime) ou manual (Inbox) — fora da janela de 24h, com consentimento `purpose="messaging"` revogado, ou depois de um opt-out; ponto único de decisão, não duplicado por caminho de envio
 - Opt-out/opt-in por palavra-chave: uma mensagem como "parar"/"sair"/"stop" marca o contato como opted-out e cancela toda automação em andamento para ele; "voltar"/"iniciar"/"start" reabre
 - Nós `action` (`add_tag`/`remove_tag`/`set_field`), `goal` (marcador/analytics) e `start_another_flow` (dispara outra automação publicada para o mesmo contato, fire-and-forget) agora funcionam no runtime e têm paleta + painel de propriedades no Flow Builder
+- `collect_input`: pausa a execução esperando a próxima mensagem do contato e injeta o texto numa variável (`{{flow.<nome>}}`), disponível nos nós seguintes do mesmo grafo — `apps/api/src/automations/execution/collect-input.listener.ts`
+- `external_request`: chamada HTTP saindo do runtime, com allow-list de host obrigatória (`EXTERNAL_REQUEST_ALLOWED_HOSTS`, falha fechado se vazia), timeout configurável, retry em falha (mesmo padrão do `send_message`) e resposta salva opcionalmente num campo personalizado
+- Todos os 11 tipos de nó do `graph.types.ts` agora têm handler no runtime, regra no `graph-validator.ts`, e paleta + painel de propriedades no Flow Builder — não há mais nenhum nó "aceito no builder mas rejeitado em produção"
 - Deploy pronto para produção via [render.yaml](render.yaml) (ver seção Deploy abaixo) — necessário para testar com um número/conta real, já que a Meta não chama `localhost`
 
 ## O que ainda não existe (não alegar pronto)
 
-- Nós `collect_input` e `external_request` continuam rejeitados pelo runtime como "não suportado ainda" — o primeiro depende de uma forma de "esperar a próxima mensagem do contato"; o segundo precisa de allow-list de domínio e timeout antes de fazer uma chamada HTTP arbitrária a partir do runtime (risco de SSRF se feito sem isso)
 - `start_another_flow` só impede o caso mais óbvio de auto-loop (uma automação apontando direto para si mesma); um ciclo indireto (A inicia B, B inicia A) não é detectado e pode gerar execuções em cascata
+- `EXTERNAL_REQUEST_ALLOWED_HOSTS` é uma allow-list global por deploy, não por workspace — qualquer Builder em qualquer workspace pode chamar qualquer host que o operador já tenha liberado; não há isolamento por workspace nem proteção contra DNS rebinding (um host allow-listado cuja resolução de DNS mude para um IP interno não é bloqueado)
 - Uma nova mensagem do contato pode disparar uma automação nova mesmo enquanto a conversa está em atendimento humano (`HUMAN`/`WAITING_HUMAN`) — o `TriggerMatcherService` ainda não considera o status da conversa antes de abrir uma nova execução (o `send_message` dessa nova execução seria bloqueado pelo Policy Engine só se o contato tiver de fato opinado out — não é um gate específico para "está em atendimento humano")
 - Sem observabilidade dedicada ainda (M10): logs estruturados, métricas de fila/DLQ e um `/health` de verdade para produção
 - `MetaAdapter.sendMessage` chama a Graph API real e já foi confirmado conversando de fato com `graph.facebook.com` (ver validação abaixo) — falta apenas testar com credenciais de um app Meta aprovado em vez de um token fake, para confirmar um envio bem-sucedido de ponta a ponta
@@ -196,6 +200,20 @@ Ação pela paleta, editei tipo/tag no painel de propriedades, e "Validar" retor
 arestas — confirmando que a validação nova (`ACTION_MISSING_TYPE`, `ACTION_MISSING_TAG`,
 `START_ANOTHER_FLOW_MISSING_TARGET`) está mesmo no caminho do backend, não só no tipo TypeScript do
 frontend.
+
+**`collect_input` e `external_request` validados com uma chamada HTTPS de saída real, não só mockada**
+(2026-07-20): publiquei `trigger → collect_input(favorite_color) → external_request(POST
+https://postman-echo.com/post) → send_message → end`. Um primeiro webhook (gatilho) deixou a execução
+`WAITING` com `currentNodeId` ainda apontando pro próprio nó `collect_input` no Postgres (confirmando
+que ele não pré-avança, diferente de `delay`/`human_handoff`); um segundo webhook ("roxo") fez o
+`CollectInputListener` gravar `{"favorite_color": "roxo"}` em `contextJson` e reenfileirar — e o
+`external_request` bateu de verdade em `postman-echo.com`, recebeu 200, e a resposta foi salva num
+campo personalizado (uma tentativa anterior com um campo do tipo errado falhou com um erro de coerção
+claro, confirmando que a chamada de rede realmente aconteceu antes dessa falha). O `send_message`
+seguinte renderizou `{{flow.favorite_color}}` como "You picked roxo" corretamente. Uma segunda
+automação apontando pra um host fora da allow-list (`evil.example.com`) falhou permanentemente sem
+nenhuma tentativa de rede — confirmando o fail-closed do SSRF. No Flow Builder, os dois nós renderizam
+na paleta e no painel de propriedades com os valores reais salvos.
 
 ## Limitações conhecidas
 

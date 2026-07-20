@@ -5,6 +5,7 @@ import { AutomationNodeData } from "./AutomationNode";
 
 const OPERATORS = ["equals", "not_equals", "contains", "not_contains", "greater_than", "less_than", "exists", "not_exists"];
 const ACTION_TYPES = ["add_tag", "remove_tag", "set_field"];
+const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 
 export function NodePropertiesPanel({
   node,
@@ -161,6 +162,67 @@ export function NodePropertiesPanel({
             placeholder="cole o ID de outra automação publicada"
           />
         </Field>
+      )}
+
+      {nodeType === "collect_input" && (
+        <Field label="Nome da variável">
+          <input
+            className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
+            value={(fields.variableName as string) ?? ""}
+            onChange={(e) => onChange({ ...fields, variableName: e.target.value })}
+            placeholder="cor_favorita"
+          />
+          <p className="mt-1 text-xs text-slate-400">
+            Pausa até a próxima mensagem do contato. Use depois como {"{{flow."}
+            {(fields.variableName as string) || "nome_da_variavel"}
+            {"}}"}.
+          </p>
+        </Field>
+      )}
+
+      {nodeType === "external_request" && (
+        <>
+          <Field label="URL (https)">
+            <input
+              className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
+              value={(fields.url as string) ?? ""}
+              onChange={(e) => onChange({ ...fields, url: e.target.value })}
+              placeholder="https://api.exemplo.com/lookup"
+            />
+          </Field>
+          <Field label="Método">
+            <select
+              className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
+              value={(fields.method as string)?.toUpperCase() ?? "GET"}
+              onChange={(e) => onChange({ ...fields, method: e.target.value })}
+            >
+              {HTTP_METHODS.map((method) => (
+                <option key={method} value={method}>
+                  {method}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Corpo (opcional, JSON)">
+            <textarea
+              className="h-20 w-full rounded border border-slate-300 px-2 py-1 text-sm"
+              value={(fields.body as string) ?? ""}
+              onChange={(e) => onChange({ ...fields, body: e.target.value })}
+              placeholder='{"contactId": "{{contact.custom.crm_id}}"}'
+            />
+          </Field>
+          <Field label="Salvar resposta no campo personalizado (opcional)">
+            <input
+              className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
+              value={(fields.saveResponseAs as string) ?? ""}
+              onChange={(e) => onChange({ ...fields, saveResponseAs: e.target.value })}
+              placeholder="produto_interesse"
+            />
+          </Field>
+          <p className="text-xs text-slate-400">
+            O host precisa estar na allow-list configurada no servidor (EXTERNAL_REQUEST_ALLOWED_HOSTS).
+          </p>
+        </>
       )}
 
       {(nodeType === "end" || nodeType === "human_handoff") && (

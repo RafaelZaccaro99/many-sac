@@ -5,6 +5,7 @@ const ctx: VariableContext = {
   workspaceName: "Acme",
   assigneeName: "Bruno",
   customFieldValues: { product_interest: "CRM" },
+  flowVariables: { favorite_color: "blue" },
 };
 
 describe("resolveVariableValue", () => {
@@ -28,6 +29,14 @@ describe("resolveVariableValue", () => {
 
   it("returns undefined for a completely unknown path", () => {
     expect(resolveVariableValue("something.made_up", ctx)).toBeUndefined();
+  });
+
+  it("resolves a flow variable collected mid-flow by key", () => {
+    expect(resolveVariableValue("flow.favorite_color", ctx)).toBe("blue");
+  });
+
+  it("resolves an unset flow variable as null", () => {
+    expect(resolveVariableValue("flow.never_collected", ctx)).toBeNull();
   });
 });
 

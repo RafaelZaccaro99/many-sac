@@ -14,7 +14,8 @@ const BASE_GRAPH = {
     { id: "a1", type: AutomationNodeType.ACTION, data: { actionType: "add_tag", tag: "vip" } },
     { id: "g1", type: AutomationNodeType.GOAL, data: { name: "signup_started" } },
     { id: "s1", type: AutomationNodeType.START_ANOTHER_FLOW, data: { automationId: "auto-other" } },
-    { id: "ci1", type: AutomationNodeType.COLLECT_INPUT, data: {} },
+    { id: "ci1", type: AutomationNodeType.COLLECT_INPUT, data: { variableName: "favorite_color" } },
+    { id: "x1", type: AutomationNodeType.EXTERNAL_REQUEST, data: { url: "https://api.example.com/lookup", method: "post", saveResponseAs: "plan" } },
   ],
   edges: [
     { id: "e-t1-m1", source: "t1", target: "m1" },
@@ -26,6 +27,8 @@ const BASE_GRAPH = {
     { id: "e-a1-e2", source: "a1", target: "e2" },
     { id: "e-g1-e2", source: "g1", target: "e2" },
     { id: "e-s1-e2", source: "s1", target: "e2" },
+    { id: "e-ci1-e2", source: "ci1", target: "e2" },
+    { id: "e-x1-e2", source: "x1", target: "e2" },
   ],
 };
 
@@ -98,9 +101,30 @@ function buildRunner(overrides: Partial<any> = {}) {
   const executionQueue = { enqueueStep: jest.fn().mockResolvedValue(undefined) } as any;
   const conversationsService = { openForHandoff: jest.fn().mockResolvedValue("conv-1") } as any;
   const policyService = { canSend: jest.fn().mockResolvedValue({ allowed: true, reasonCode: null }) } as any;
+  const configService = { get: jest.fn().mockReturnValue("") } as any;
 
-  const runner = new ExecutionRunnerService(prisma, credentialsCipher, metaAdapter, executionQueue, conversationsService, policyService);
-  return { runner, prisma, credentialsCipher, metaAdapter, executionQueue, conversationsService, policyService, execution, stepExecutions, updateCalls };
+  const runner = new ExecutionRunnerService(
+    prisma,
+    credentialsCipher,
+    metaAdapter,
+    executionQueue,
+    conversationsService,
+    policyService,
+    configService,
+  );
+  return {
+    runner,
+    prisma,
+    credentialsCipher,
+    metaAdapter,
+    executionQueue,
+    conversationsService,
+    policyService,
+    configService,
+    execution,
+    stepExecutions,
+    updateCalls,
+  };
 }
 
 describe("ExecutionRunnerService.runStep", () => {
@@ -114,6 +138,7 @@ describe("ExecutionRunnerService.runStep", () => {
     const { runner } = buildRunner();
     const runnerNoExec = new ExecutionRunnerService(
       { automationExecution: { findUnique: jest.fn().mockResolvedValue(null) } } as any,
+      {} as any,
       {} as any,
       {} as any,
       {} as any,
@@ -245,7 +270,11 @@ describe("ExecutionRunnerService.runStep", () => {
   });
 
   it("fails permanently for a node type the runtime doesn't support yet", async () => {
-    const { runner, updateCalls } = buildRunner({ currentNodeId: "ci1" });
+    const futureTypeGraph = {
+      nodes: [...BASE_GRAPH.nodes, { id: "future1", type: "some_future_node_type" as any, data: {} }],
+      edges: BASE_GRAPH.edges,
+    };
+    const { runner, updateCalls } = buildRunner({ currentNodeId: "future1", automationVersion: { graph: futureTypeGraph, automationId: "auto-self" } });
 
     await runner.runStep("exec-1");
 
@@ -407,5 +436,108 @@ describe("ExecutionRunnerService.runStep", () => {
     await runner.runStep("exec-1");
 
     expect(updateCalls.at(-1)).toMatchObject({ status: AutomationExecutionStatus.FAILED_PERMANENT });
+  });
+
+  describe("collect_input node", () => {
+    it("pauses WAITING without pre-advancing currentNodeId or touching the queue", async () => {
+      const { runner, updateCalls, stepExecutions, executionQueue } = buildRunner({ currentNodeId: "ci1" });
+
+      await runner.runStep("exec-1");
+
+      expect(stepExecutions.at(-1)).toMatchObject({ nodeId: "ci1", status: AutomationStepStatus.COMPLETED, input: { variableName: "favorite_color" } });
+      expect(updateCalls.at(-1)).toEqual({ status: AutomationExecutionStatus.WAITING });
+      expect(executionQueue.enqueueStep).not.toHaveBeenCalled();
+    });
+
+    it("fails permanently when a collect_input node has no outgoing edge", async () => {
+      const brokenGraph = { nodes: BASE_GRAPH.nodes, edges: BASE_GRAPH.edges.filter((e) => e.source !== "ci1") };
+      const { runner, updateCalls } = buildRunner({ currentNodeId: "ci1", automationVersion: { graph: brokenGraph, automationId: "auto-self" } });
+
+      await runner.runStep("exec-1");
+
+      expect(updateCalls.at(-1)).toMatchObject({ status: AutomationExecutionStatus.FAILED_PERMANENT });
+    });
+
+    it("fails permanently when a collect_input node has no variableName", async () => {
+      const badGraph = {
+        nodes: BASE_GRAPH.nodes.map((n) => (n.id === "ci1" ? { ...n, data: {} } : n)),
+        edges: BASE_GRAPH.edges,
+      };
+      const { runner, updateCalls } = buildRunner({ currentNodeId: "ci1", automationVersion: { graph: badGraph, automationId: "auto-self" } });
+
+      await runner.runStep("exec-1");
+
+      expect(updateCalls.at(-1)).toMatchObject({ status: AutomationExecutionStatus.FAILED_PERMANENT });
+    });
+  });
+
+  describe("external_request node", () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it("fails permanently (without calling fetch) when the host isn't on the allow-list", async () => {
+      const fetchSpy = jest.spyOn(global, "fetch");
+      const { runner, updateCalls, configService } = buildRunner({ currentNodeId: "x1" });
+      configService.get.mockReturnValue("");
+
+      await runner.runStep("exec-1");
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(updateCalls.at(-1)).toMatchObject({ status: AutomationExecutionStatus.FAILED_PERMANENT });
+    });
+
+    it("fails permanently for a non-https url even if the host is allow-listed", async () => {
+      const insecureGraph = {
+        nodes: BASE_GRAPH.nodes.map((n) => (n.id === "x1" ? { ...n, data: { ...n.data, url: "http://api.example.com/lookup" } } : n)),
+        edges: BASE_GRAPH.edges,
+      };
+      const fetchSpy = jest.spyOn(global, "fetch");
+      const { runner, updateCalls, configService } = buildRunner({
+        currentNodeId: "x1",
+        automationVersion: { graph: insecureGraph, automationId: "auto-self" },
+      });
+      configService.get.mockReturnValue("api.example.com");
+
+      await runner.runStep("exec-1");
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(updateCalls.at(-1)).toMatchObject({ status: AutomationExecutionStatus.FAILED_PERMANENT });
+    });
+
+    it("calls the allow-listed host, saves the response into a custom field, and advances", async () => {
+      // Not valid JSON on purpose - the default mocked custom field is TEXT, so
+      // this exercises parseResponseBody's fallback to the raw response text.
+      const fetchSpy = jest.spyOn(global, "fetch").mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => "pro",
+      } as any);
+      const { runner, prisma, updateCalls, stepExecutions, configService } = buildRunner({ currentNodeId: "x1" });
+      configService.get.mockReturnValue("api.example.com, other.example.com");
+
+      await runner.runStep("exec-1");
+
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "https://api.example.com/lookup",
+        expect.objectContaining({ method: "POST" }),
+      );
+      expect(prisma.customFieldValue.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ create: expect.objectContaining({ valueText: "pro" }) }),
+      );
+      expect(stepExecutions.at(-1)).toMatchObject({ nodeId: "x1", status: AutomationStepStatus.COMPLETED });
+      expect(updateCalls.at(-1)).toMatchObject({ status: AutomationExecutionStatus.QUEUED, currentNodeId: "e2" });
+    });
+
+    it("marks FAILED_RETRYABLE and rethrows on a non-2xx response, so BullMQ retries", async () => {
+      jest.spyOn(global, "fetch").mockResolvedValue({ ok: false, status: 500, text: async () => "boom" } as any);
+      const { runner, updateCalls, stepExecutions, configService } = buildRunner({ currentNodeId: "x1" });
+      configService.get.mockReturnValue("api.example.com");
+
+      await expect(runner.runStep("exec-1")).rejects.toThrow(/500/);
+
+      expect(stepExecutions.at(-1)).toMatchObject({ nodeId: "x1", status: AutomationStepStatus.FAILED });
+      expect(updateCalls.at(-1)).toMatchObject({ status: AutomationExecutionStatus.FAILED_RETRYABLE });
+    });
   });
 });

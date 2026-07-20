@@ -1,4 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { AutomationExecutionStatus, AutomationStepStatus, AutomationVersionStatus, ChannelProvider, Prisma } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { CredentialsCipher } from "../../channels/credentials-cipher";
@@ -13,6 +14,7 @@ import { evaluateCondition, ConditionData } from "./condition-evaluator";
 import { coerceCustomFieldValue, decodeCustomFieldValue } from "../../contacts/custom-field-coercion";
 
 export const MAX_STEPS_PER_EXECUTION = 50;
+const EXTERNAL_REQUEST_DEFAULT_TIMEOUT_MS = 10_000;
 
 const EXECUTION_INCLUDE = {
   automationVersion: true,
@@ -41,6 +43,7 @@ export class ExecutionRunnerService {
     private readonly executionQueue: ExecutionQueueService,
     private readonly conversationsService: ConversationsService,
     private readonly policyService: PolicyService,
+    private readonly configService: ConfigService,
   ) {}
 
   async runStep(executionId: string): Promise<void> {
@@ -90,6 +93,7 @@ export class ExecutionRunnerService {
       customFieldValues: Object.fromEntries(
         execution.contact.fieldValues.map((fv) => [fv.fieldDefinition.key, decodeCustomFieldValue(fv.fieldDefinition.type, fv)]),
       ),
+      flowVariables: (execution.contextJson as Record<string, unknown> | null) ?? {},
     };
 
     const nextEdge = graph.edges.find((e) => e.source === node.id);
@@ -129,6 +133,14 @@ export class ExecutionRunnerService {
 
       case AutomationNodeType.START_ANOTHER_FLOW:
         await this.runStartAnotherFlow(execution, node, nextEdge);
+        return;
+
+      case AutomationNodeType.COLLECT_INPUT:
+        await this.runCollectInput(execution, node, nextEdge);
+        return;
+
+      case AutomationNodeType.EXTERNAL_REQUEST:
+        await this.runExternalRequest(execution, node, varContext, nextEdge);
         return;
 
       default:
@@ -252,6 +264,140 @@ export class ExecutionRunnerService {
     });
   }
 
+  /**
+   * Pauses waiting for the contact's next message, unlike human_handoff/delay:
+   * currentNodeId deliberately stays on this node (not pre-advanced to
+   * nextEdge.target) because resuming needs to know which variableName to
+   * fill and where to advance to - see CollectInputListener, which does both
+   * atomically when the next contact.message_received event arrives.
+   */
+  private async runCollectInput(
+    execution: LoadedExecution,
+    node: AutomationGraphNode,
+    nextEdge: AutomationGraph["edges"][number] | undefined,
+  ): Promise<void> {
+    if (!nextEdge) {
+      await this.failPermanently(execution.id, node.id, "collect_input node has no outgoing edge");
+      return;
+    }
+    if (typeof node.data.variableName !== "string" || !node.data.variableName) {
+      await this.failPermanently(execution.id, node.id, "collect_input node needs a variableName");
+      return;
+    }
+
+    await this.recordStep(execution.id, node.id, AutomationStepStatus.COMPLETED, { variableName: node.data.variableName }, undefined);
+    await this.prisma.automationExecution.update({
+      where: { id: execution.id },
+      data: { status: AutomationExecutionStatus.WAITING },
+    });
+  }
+
+  /**
+   * Fails closed by default: EXTERNAL_REQUEST_ALLOWED_HOSTS (comma-separated
+   * hostnames) must explicitly list a host before any node can call it. An
+   * unset/empty allow-list means every external_request node fails - a
+   * workspace Builder's automation must never be able to make the runtime
+   * call an arbitrary URL (SSRF) just because they typed one into a node.
+   */
+  private isHostAllowed(hostname: string): boolean {
+    const allowList = this.configService.get<string>("EXTERNAL_REQUEST_ALLOWED_HOSTS", "");
+    const allowedHosts = allowList
+      .split(",")
+      .map((h) => h.trim())
+      .filter(Boolean);
+    return allowedHosts.includes(hostname);
+  }
+
+  private async runExternalRequest(
+    execution: LoadedExecution,
+    node: AutomationGraphNode,
+    varContext: VariableContext,
+    nextEdge: AutomationGraph["edges"][number] | undefined,
+  ): Promise<void> {
+    if (!nextEdge) {
+      await this.failPermanently(execution.id, node.id, "external_request node has no outgoing edge");
+      return;
+    }
+
+    const rawUrl = node.data.url;
+    if (typeof rawUrl !== "string") {
+      await this.failPermanently(execution.id, node.id, "external_request node needs a url");
+      return;
+    }
+
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(rawUrl);
+    } catch {
+      await this.failPermanently(execution.id, node.id, `external_request node has an invalid url "${rawUrl}"`);
+      return;
+    }
+
+    if (parsedUrl.protocol !== "https:" || !this.isHostAllowed(parsedUrl.hostname)) {
+      await this.failPermanently(
+        execution.id,
+        node.id,
+        `external_request host "${parsedUrl.hostname}" is not on the EXTERNAL_REQUEST_ALLOWED_HOSTS allow-list`,
+      );
+      return;
+    }
+
+    const method = typeof node.data.method === "string" ? node.data.method.toUpperCase() : "GET";
+    const hasBody = method !== "GET" && method !== "DELETE";
+    const renderedBody = typeof node.data.body === "string" ? renderTemplate(node.data.body, varContext) : node.data.body;
+    const timeoutMs =
+      typeof node.data.timeoutMs === "number" && node.data.timeoutMs > 0 ? node.data.timeoutMs : EXTERNAL_REQUEST_DEFAULT_TIMEOUT_MS;
+
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      let response: Response;
+      let responseText: string;
+      try {
+        response = await fetch(parsedUrl.toString(), {
+          method,
+          headers: { "Content-Type": "application/json" },
+          body: hasBody ? JSON.stringify(renderedBody ?? {}) : undefined,
+          signal: controller.signal,
+        });
+        responseText = await response.text();
+      } finally {
+        clearTimeout(timeout);
+      }
+
+      if (!response.ok) {
+        throw new Error(`external_request failed (${response.status}): ${responseText.slice(0, 500)}`);
+      }
+
+      if (typeof node.data.saveResponseAs === "string" && node.data.saveResponseAs) {
+        await this.setCustomFieldValue(execution, node.data.saveResponseAs, parseResponseBody(responseText));
+      }
+
+      await this.recordStep(
+        execution.id,
+        node.id,
+        AutomationStepStatus.COMPLETED,
+        { url: parsedUrl.toString(), method, status: response.status },
+        undefined,
+      );
+      await this.advance(execution.id, nextEdge.target);
+    } catch (err: any) {
+      await this.recordStep(
+        execution.id,
+        node.id,
+        AutomationStepStatus.FAILED,
+        { url: parsedUrl.toString(), method },
+        err?.message ?? String(err),
+      );
+      await this.prisma.automationExecution.update({
+        where: { id: execution.id },
+        data: { status: AutomationExecutionStatus.FAILED_RETRYABLE },
+      });
+      // Rethrown so BullMQ's attempts/backoff retries this step - same treatment as send_message.
+      throw err;
+    }
+  }
+
   /** Pure marker/analytics node - has no side effect beyond recording that the contact reached it. */
   private async runGoal(executionId: string, node: AutomationGraphNode, nextEdge: AutomationGraph["edges"][number] | undefined): Promise<void> {
     const name = typeof node.data.name === "string" ? node.data.name : undefined;
@@ -325,6 +471,11 @@ export class ExecutionRunnerService {
     if (typeof key !== "string" || !key) {
       throw new Error("set_field action needs a field key");
     }
+    const rawValue = typeof node.data.value === "string" ? renderTemplate(node.data.value, varContext) : node.data.value;
+    await this.setCustomFieldValue(execution, key, rawValue);
+  }
+
+  private async setCustomFieldValue(execution: LoadedExecution, key: string, rawValue: unknown): Promise<void> {
     const definition = await this.prisma.customFieldDefinition.findUnique({
       where: { workspaceId_key: { workspaceId: execution.workspaceId, key } },
     });
@@ -332,7 +483,6 @@ export class ExecutionRunnerService {
       throw new Error(`Custom field "${key}" is not defined in this workspace`);
     }
 
-    const rawValue = typeof node.data.value === "string" ? renderTemplate(node.data.value, varContext) : node.data.value;
     const coerced = coerceCustomFieldValue(definition.type, rawValue);
 
     await this.prisma.customFieldValue.upsert({
@@ -460,4 +610,13 @@ function isTerminal(status: AutomationExecutionStatus): boolean {
     status === AutomationExecutionStatus.FAILED_PERMANENT ||
     status === AutomationExecutionStatus.CANCELED
   );
+}
+
+/** external_request responses are usually JSON; fall back to the raw text for anything else. */
+function parseResponseBody(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
 }
