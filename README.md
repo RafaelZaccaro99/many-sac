@@ -111,7 +111,7 @@ npm run lint:api
 npm run build:api
 ```
 
-## O que já funciona (M0-M9 + todos os tipos de nó do runtime)
+## O que já funciona (M0-M10 + todos os tipos de nó do runtime)
 
 - Signup / login (JWT) — `POST /auth/signup`, `POST /auth/login`, `GET /auth/me`
 - Workspaces multiempresa com papéis Owner/Admin/Builder/Agent/Analyst, convites, troca de papel e remoção de membro — `POST/GET /workspaces`, `/workspaces/:id/members`, `/workspaces/:id/invitations`
@@ -134,6 +134,9 @@ npm run build:api
 - `collect_input`: pausa a execução esperando a próxima mensagem do contato e injeta o texto numa variável (`{{flow.<nome>}}`), disponível nos nós seguintes do mesmo grafo — `apps/api/src/automations/execution/collect-input.listener.ts`
 - `external_request`: chamada HTTP saindo do runtime, com allow-list de host obrigatória (`EXTERNAL_REQUEST_ALLOWED_HOSTS`, falha fechado se vazia), timeout configurável, retry em falha (mesmo padrão do `send_message`) e resposta salva opcionalmente num campo personalizado
 - Todos os 11 tipos de nó do `graph.types.ts` agora têm handler no runtime, regra no `graph-validator.ts`, e paleta + painel de propriedades no Flow Builder — não há mais nenhum nó "aceito no builder mas rejeitado em produção"
+- `GET /health` checa Postgres e Redis de verdade (não só "o processo está de pé"), retornando 503 com o detalhamento de qual dependência caiu — é o que o `healthCheckPath` do Render usa pra decidir se um deploy está saudável
+- `GET /metrics` (`apps/api/src/observability/`, protegido por `METRICS_TOKEN` no header `X-Metrics-Token`, falha fechado se não configurado): execuções por status, profundidade da fila de execução e da dead-letter queue, backlog do outbox, total de negações do Policy Engine
+- Logs estruturados em JSON quando `NODE_ENV=production` (`JsonLogger`, uma linha JSON por evento) — o dev local continua com o logger colorido padrão do Nest
 - Deploy pronto para produção via [render.yaml](render.yaml) (ver seção Deploy abaixo) — necessário para testar com um número/conta real, já que a Meta não chama `localhost`
 
 ## O que ainda não existe (não alegar pronto)
@@ -141,7 +144,7 @@ npm run build:api
 - `start_another_flow` só impede o caso mais óbvio de auto-loop (uma automação apontando direto para si mesma); um ciclo indireto (A inicia B, B inicia A) não é detectado e pode gerar execuções em cascata
 - `EXTERNAL_REQUEST_ALLOWED_HOSTS` é uma allow-list global por deploy, não por workspace — qualquer Builder em qualquer workspace pode chamar qualquer host que o operador já tenha liberado; não há isolamento por workspace nem proteção contra DNS rebinding (um host allow-listado cuja resolução de DNS mude para um IP interno não é bloqueado)
 - Uma nova mensagem do contato pode disparar uma automação nova mesmo enquanto a conversa está em atendimento humano (`HUMAN`/`WAITING_HUMAN`) — o `TriggerMatcherService` ainda não considera o status da conversa antes de abrir uma nova execução (o `send_message` dessa nova execução seria bloqueado pelo Policy Engine só se o contato tiver de fato opinado out — não é um gate específico para "está em atendimento humano")
-- Sem observabilidade dedicada ainda (M10): logs estruturados, métricas de fila/DLQ e um `/health` de verdade para produção
+- `/metrics` é um snapshot JSON simples, não formato Prometheus — não há scrape target nem stack de monitoramento (Grafana etc.) configurado ainda, e nenhuma métrica de latência de processamento de webhook (só o proxy indireto de idade do backlog do outbox)
 - `MetaAdapter.sendMessage` chama a Graph API real e já foi confirmado conversando de fato com `graph.facebook.com` (ver validação abaixo) — falta apenas testar com credenciais de um app Meta aprovado em vez de um token fake, para confirmar um envio bem-sucedido de ponta a ponta
 - O Flow Builder não tem posicionamento automático de nós (arrastar manualmente é necessário) nem atalhos de teclado; é funcional, não polido
 
@@ -214,6 +217,15 @@ seguinte renderizou `{{flow.favorite_color}}` como "You picked roxo" corretament
 automação apontando pra um host fora da allow-list (`evil.example.com`) falhou permanentemente sem
 nenhuma tentativa de rede — confirmando o fail-closed do SSRF. No Flow Builder, os dois nós renderizam
 na paleta e no painel de propriedades com os valores reais salvos.
+
+**M10 (Observabilidade) validado contra a API real rodando** (2026-07-20): `curl /health` respondeu
+`{"status":"ok","checks":{"database":"ok","redis":"ok"}}` com 200 contra o Postgres/Redis locais reais.
+`curl /metrics` sem header retornou 401; com o token errado, 401; com `X-Metrics-Token` correto, 200 com
+números reais refletindo toda a atividade acumulada da sessão (execuções por status, profundidade da
+fila e da dead-letter queue, total de negações do Policy Engine) — não dados de exemplo. O caminho de
+falha do `/health` (Postgres ou Redis fora do ar) tem cobertura de teste unitário exercitando o mesmo
+código, não uma reimplementação em mock — provocar uma queda de verdade do banco/Redis locais arriscaria
+desestabilizar o ambiente usado pelo resto da sessão.
 
 ## Limitações conhecidas
 

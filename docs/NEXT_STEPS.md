@@ -4,37 +4,38 @@ Documento vivo — atualize/apague itens conforme forem resolvidos. Objetivo: qu
 (sua ou de um agente) consegue retomar o trabalho lendo só este arquivo, sem precisar reconstruir
 contexto a partir da conversa anterior.
 
-**Última atualização:** 2026-07-20, depois de M8 (Inbox) + M9 (Policy Engine) + **todos os 11 tipos de
-nó do runtime** implementados (`action`/`goal`/`start_another_flow`/`collect_input`/`external_request`).
-Commit `6e152f3` já confirmado no GitHub (push feito entre sessões); o trabalho de `collect_input`/
-`external_request` desta sessão ainda está **local, não commitado** — ver seção 0.
+**Última atualização:** 2026-07-20, depois de M8 (Inbox) + M9 (Policy Engine) + **M10 (Observabilidade)**
++ **todos os 11 tipos de nó do runtime** implementados. Commits `6e152f3` e `ae64f68` já confirmados no
+GitHub (push feito entre sessões). O trabalho de M10 (`/health` real, `/metrics`, logs JSON) desta sessão
+ainda está **local, não commitado** — ver seção 0.
 
 ## Estado atual em uma frase
 
 O produto funciona de ponta a ponta contra Postgres/Redis/BullMQ reais (validado, não só testado com
-mock), incluindo uma chamada HTTPS de saída real (`external_request` contra `postman-echo.com`) — M0 a
-M9 do `docs/ROADMAP.md` estão feitos, e não existe mais nenhum tipo de nó "aceito no Flow Builder mas
+mock), incluindo uma chamada HTTPS de saída real e um `/health`/`/metrics` reais — M0 a M10 do
+`docs/ROADMAP.md` estão todos feitos, e não existe mais nenhum tipo de nó "aceito no Flow Builder mas
 rejeitado em produção". O que falta é (1) colocar isso no ar com uma conta Meta real e (2) fechar as
-lacunas menores já documentadas no README (M10, paginação, idempotency key, etc.).
+lacunas menores já documentadas no README (paginação, idempotency key, exclusão de workspace, etc.) -
+ver Fase 7.
 
 ---
 
-## 0. Ação pendente desta sessão: commitar collect_input/external_request
+## 0. Ação pendente desta sessão: commitar M10 (Observabilidade)
 
-Ainda não commitei o trabalho desta sessão (`collect_input`, `external_request`, o namespace `flow.*`
-de variáveis, e as correções no Flow Builder). Se você está lendo isto e não pediu explicitamente pra
-eu commitar antes de parar, rode:
+Ainda não commitei o trabalho desta sessão (`/health` real, `/metrics`, `JsonLogger`, `METRICS_TOKEN`/
+`EXTERNAL_REQUEST_ALLOWED_HOSTS` no `render.yaml`). Se você está lendo isto e não pediu explicitamente
+pra eu commitar antes de parar, rode:
 
 ```bash
 cd "/Users/rafaelzaccaro/MANY ZAC"
 git status --short   # confira o que está pendente antes de decidir
 git add -A            # ou liste os arquivos manualmente
-git commit -m "Add collect_input and external_request runtime nodes"
+git commit -m "Add M10 observability: real /health, /metrics, JSON logging"
 git push origin main  # eu não consigo fazer isso - ver seção 1
 ```
 
 Ou simplesmente peça "commite e dê push" na próxima sessão - eu comito, e o push você confirma como já
-fez da última vez (seção 1 explica por quê).
+fez das últimas vezes (seção 1 explica por quê).
 
 ---
 
@@ -72,6 +73,9 @@ Ordem sugerida:
    - `CREDENTIALS_ENCRYPTION_KEY` → `openssl rand -base64 32`
    - `META_APP_SECRET` (passo 6)
    - `META_WEBHOOK_VERIFY_TOKEN` → qualquer string aleatória, ex: `openssl rand -hex 16`
+   - `EXTERNAL_REQUEST_ALLOWED_HOSTS` → vazio bloqueia todo nó `external_request`; liste os hosts que
+     suas automações podem chamar, separados por vírgula, só quando precisar dessa feature
+   - `METRICS_TOKEN` → `openssl rand -hex 16`; sem isso `GET /metrics` fica inacessível (falha fechado)
    - Se o serviço **já existir** de uma sessão anterior (os commits de "fix Render build" sugerem que
      sim), só confirme que essas variáveis estão preenchidas e que o deploy mais recente ficou verde.
 5. **Frontend na Vercel**: Add New → Project no mesmo repo, **Root Directory** = `apps/web`. Variável
@@ -105,12 +109,14 @@ Postgres/Redis reais e uma chamada HTTPS de saída de verdade (`postman-echo.com
 `docs/ROADMAP.md` pros detalhes. Único item que sobrou: `start_another_flow` só bloqueia o auto-loop
 direto, não um ciclo indireto A→B→A (ver Fase 7).
 
-### Fase 6 — M10: Observabilidade
-- `/health` de verdade (Render já aponta `healthCheckPath: /health` no `render.yaml`, mas o handler
-  atual é mínimo — confirmar se cobre Postgres/Redis/fila ou só "processo de pé").
-- Logs estruturados (JSON) em produção.
-- Métricas essenciais: taxa de `FAILED_PERMANENT`/DLQ, profundidade da fila BullMQ, latência de
-  processamento de webhook, taxa de bloqueios do Policy Engine.
+### Fase 6 — M10: Observabilidade: ✅ feito (2026-07-20)
+`GET /health` checa Postgres + Redis de verdade (503 com detalhamento se algo estiver down, em vez de
+sempre `{status:"ok"}`). `GET /metrics` (protegido por `METRICS_TOKEN` no header `X-Metrics-Token`,
+falha fechado) expõe execuções por status, profundidade da fila de execução e da dead-letter queue,
+backlog do outbox, e total de negações do Policy Engine. Logs em JSON quando `NODE_ENV=production`
+(`JsonLogger`). Validado contra Postgres/Redis/BullMQ reais - ver `docs/ROADMAP.md` pros detalhes. Não
+inclui: formato Prometheus (é um snapshot JSON simples - não há scrape target/Grafana configurado ainda)
+nem métrica de latência de processamento de webhook (só o proxy indireto de idade do backlog do outbox).
 
 ### Fase 7 — Lacunas menores (qualquer ordem, sem dependência forte entre si)
 - Paginação por cursor em `GET /contacts` (hoje é offset/limit).
@@ -121,6 +127,8 @@ direto, não um ciclo indireto A→B→A (ver Fase 7).
   automação pode ser re-disparada por uma mensagem enquanto o contato já está em atendimento humano.
 - `start_another_flow` só bloqueia o auto-loop direto (automação apontando pra si mesma); um ciclo
   indireto A→B→A não é detectado.
+- `EXTERNAL_REQUEST_ALLOWED_HOSTS` é uma allow-list global por deploy, não por workspace, e não protege
+  contra DNS rebinding (host allow-listado cuja resolução mude pra um IP interno não é bloqueado).
 - Exception filter global pra traduzir falhas do `MetaAdapter` (Graph API) em 4xx/5xx específicos na
   resposta manual do Inbox, em vez do 500 genérico atual.
 - Flow Builder: sem posicionamento automático de nós nem atalhos de teclado (funcional, não polido).
@@ -138,13 +146,13 @@ Se você (ou um agente) está lendo isto pra continuar o trabalho, nessa ordem:
 
 1. `git log origin/main -1` e compare com o `git log -1` local — confirme se há commits locais ainda
    não empurrados (ver seção 0/1 acima).
-2. Rode `npm run test:api` na raiz — deve dar 152/152 (ou mais, se novas fases já entraram). Se não
+2. Rode `npm run test:api` na raiz — deve dar 174/174 (ou mais, se novas fases já entraram). Se não
    bater, algo mudou fora desta sessão; investigue antes de continuar.
-3. Decida: seguir pra seção 2 (deploy) ou seção 3 (fases técnicas)? Pergunte ao usuário se não estiver
-   claro — as duas frentes são independentes uma da outra.
-4. Se for continuar a Fase 6/7/8: siga o mesmo padrão já estabelecido no projeto — implementar,
-   escrever teste, validar contra Postgres/Redis reais (não só mock), atualizar `README.md` e
-   `docs/ROADMAP.md` no mesmo commit/sessão. Não deixe a documentação dessincronizar do código.
+3. Decida: seguir pra seção 2 (deploy) ou seção 3 (fases técnicas, agora só Fase 7 e 8)? Pergunte ao
+   usuário se não estiver claro — as duas frentes são independentes uma da outra.
+4. Se for continuar a Fase 7/8: siga o mesmo padrão já estabelecido no projeto — implementar, escrever
+   teste, validar contra Postgres/Redis reais (não só mock), atualizar `README.md` e `docs/ROADMAP.md`
+   no mesmo commit/sessão. Não deixe a documentação dessincronizar do código.
 
 ---
 

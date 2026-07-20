@@ -11,8 +11,10 @@ import { ChannelsModule } from "./channels/channels.module";
 import { EventsModule } from "./events/events.module";
 import { AutomationsModule } from "./automations/automations.module";
 import { ExecutionModule } from "./automations/execution/execution.module";
+import { ExecutionQueueModule } from "./automations/execution/execution-queue.module";
 import { ConversationsModule } from "./conversations/conversations.module";
 import { PolicyModule } from "./policy/policy.module";
+import { ObservabilityModule } from "./observability/observability.module";
 
 @Module({
   imports: [
@@ -29,6 +31,8 @@ import { PolicyModule } from "./policy/policy.module";
     ConversationsModule,
     AutomationsModule,
     ExecutionModule,
+    ExecutionQueueModule,
+    ObservabilityModule,
   ],
   controllers: [AppController],
 })

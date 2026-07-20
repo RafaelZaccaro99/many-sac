@@ -2,9 +2,11 @@ import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
 import { ValidationPipe } from "@nestjs/common";
 import { AppModule } from "./app.module";
+import { JsonLogger } from "./common/logging/json-logger.service";
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { rawBody: true });
+  const useJsonLogs = process.env.NODE_ENV === "production";
+  const app = await NestFactory.create(AppModule, { rawBody: true, logger: useJsonLogs ? new JsonLogger() : undefined });
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
