@@ -47,9 +47,14 @@ Next.js vai na **Vercel**, que tem suporte nativo a Next.js e é mais simples pr
 ### 1. Bancos gerenciados (fora do Render, para não misturar com o compute)
 
 - Postgres: [neon.tech](https://neon.tech) ou [supabase.com](https://supabase.com) (ambos com tier
-  gratuito permanente) — copie a `DATABASE_URL`. No Supabase, use a **conexão direta** (porta `5432`,
-  não a "Transaction pooler" na `6543`) — a API roda como processo único sempre ligado no Render, não
-  precisa de pooler, e `prisma migrate deploy` funciona melhor direto.
+  gratuito permanente) — copie a `DATABASE_URL`. **No Supabase, use o "Session pooler"** (Project
+  Settings → Database → Connection string → aba "Session pooler", host
+  `aws-0-<região>.pooler.supabase.com`, porta `5432`) — **não** a "conexão direta"
+  (`db.<projeto>.supabase.co`), que hoje só resolve por IPv6 e falha com `P1001: Can't reach database
+  server` a partir do Render (que não tem saída IPv6); e **não** o "Transaction pooler" (mesma host,
+  porta `6543`), que não lida bem com prepared statements do Prisma sem configuração extra. O usuário
+  do Session pooler vem no formato `postgres.<projeto>`, diferente do `postgres` simples da conexão
+  direta — copie a string completa que o painel mostra, não troque só a porta manualmente.
 - Redis: [upstash.com](https://upstash.com) (tier gratuito permanente) — copie a `REDIS_URL`
   (use a versão `rediss://` com TLS).
 

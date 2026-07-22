@@ -4,26 +4,33 @@ Documento vivo — atualize/apague itens conforme forem resolvidos. Objetivo: qu
 (sua ou de um agente) consegue retomar o trabalho lendo só este arquivo, sem precisar reconstruir
 contexto a partir da conversa anterior.
 
-**Última atualização:** 2026-07-22. Plano técnico completo: Fases C (OAuth automático), D (soft-delete
-de workspace), E (paginação por cursor) e F (atalho de teclado) todas implementadas, testadas e
-validadas contra API/Postgres/UI reais nesta sessão. Push funciona sozinho (seção 1). **Só restam as
-Fases A e B, que só você pode fazer** (contas externas) — ver seção 2.
+**Última atualização:** 2026-07-22. Plano técnico completo (Fases C/D/E/F) feito. **Fase A também está
+feita: a API está no ar de verdade em produção** (`https://many-zac-api.onrender.com`), com Postgres
+(Supabase) e Redis (Upstash) reais - `/health` confirma os dois, e um signup/workspace real de teste
+funcionou via HTTPS pública. Só resta a **Fase B** (App Meta real + deploy do frontend na Vercel).
 
-**Nota operacional**: o Postgres local (porta 5433) parou de existir entre sessões (o diretório de dados
-anterior sumiu - provavelmente estava em `/tmp` ou similar). Recriei em `~/.many-zac/pgdata` (persistente,
-fora de qualquer diretório temporário), iniciado com
+**Nota operacional 1**: o Postgres local (porta 5433) parou de existir entre sessões (o diretório de
+dados anterior sumiu - provavelmente estava em `/tmp` ou similar). Recriei em `~/.many-zac/pgdata`
+(persistente, fora de qualquer diretório temporário), iniciado com
 `pg_ctl -D ~/.many-zac/pgdata -o "-p 5433" -l ~/.many-zac/pg.log start`. Se `curl localhost:3001/health`
 disser Redis/Postgres down, comece checando se esse processo ainda está de pé
 (`pg_isready -h localhost -p 5433`) antes de qualquer outra coisa.
 
+**Nota operacional 2**: agora tenho acesso de API ao Render e ao Supabase (chaves salvas em
+`~/.many-zac/render-api-key` e `~/.many-zac/supabase-management-token`, fora do repo, `chmod 600`) -
+consigo configurar env vars, disparar deploys e ler logs do Render, e consultar config do projeto
+Supabase, sem precisar que o usuário clique em nada. Exemplos de uso na seção 2 abaixo. Essas chaves
+foram compartilhadas em texto puro no chat em algum momento - o usuário pode revogar/regenerar a
+qualquer momento nos respectivos painéis (Render → Account Settings → API Keys; Supabase →
+Account → Access Tokens) se preferir não deixá-las de pé.
+
 ## Estado atual em uma frase
 
-O produto funciona de ponta a ponta contra Postgres/Redis/BullMQ reais (validado, não só testado com
-mock), incluindo uma chamada HTTPS de saída real, um `/health`/`/metrics` reais, um fluxo OAuth real de
-conexão de canal, exclusão de workspace, paginação por cursor e atalho de teclado no Flow Builder — M0 a
-M10 do `docs/ROADMAP.md` estão todos feitos, e todo o plano técnico que eu conseguia fazer sozinho está
-feito. O que falta agora é 100% aquisição de conta/infraestrutura (Fases A/B) - não tem mais nenhum item
-de código pendente que eu possa resolver sem depender de você.
+O produto funciona de ponta a ponta contra Postgres/Redis/BullMQ reais **e agora também está de pé em
+produção de verdade** (Render + Supabase + Upstash) - `/health` e um signup/workspace reais confirmaram
+isso via HTTPS pública, não só localhost. M0 a M10 do `docs/ROADMAP.md` estão todos feitos, todo o plano
+técnico que eu conseguia fazer sozinho está feito, e a Fase A (infra gerenciada) também está feita. Só
+falta a Fase B: criar o App real na Meta e subir o frontend na Vercel.
 
 ---
 
@@ -48,49 +55,57 @@ como Deploy Key no repo, reconfigurar `core.sshCommand` e o remote.
 
 ---
 
-## 2. O que só você pode fazer (nenhuma dessas eu consigo fazer sozinho)
+## 2. Fase A: ✅ feita (2026-07-22) — infraestrutura gerenciada real
 
-Nenhuma delas é código — são contas/credenciais externas que exigem seu login em painéis de terceiros.
-Chamo estas de **Fase A** (infra) e **Fase B** (Meta) no plano técnico abaixo.
+- **Postgres**: Supabase, projeto `unplzzkifgdjunfktvfj` (ref), região `ca-central-1`. **Importante**:
+  usamos o **Session pooler** (`aws-0-ca-central-1.pooler.supabase.com:5432`, usuário
+  `postgres.unplzzkifgdjunfktvfj`), **não** a conexão direta (`db.<projeto>.supabase.co`) - essa hoje só
+  resolve por IPv6 e o Render não tem saída IPv6, então falha com `P1001: Can't reach database server`.
+  Isso corrige a orientação anterior deste documento (que recomendava a conexão direta) - ver README,
+  seção Deploy, para o texto atualizado.
+- **Redis**: Upstash, `rediss://` (TLS), testado com `redis-cli --tls -u "..." ping` → `PONG`.
+- **API no Render**: serviço `many-zac-api` (`srv-d9d958l7vvec73euu1d0`) já existia de uma sessão
+  anterior, mas estava com as env vars secretas vazias (por isso os últimos deploys falhavam,
+  inclusive um que não mudava nenhum código). Configurei as 10 variáveis via API do Render e disparei
+  o deploy - **está no ar**: `curl https://many-zac-api.onrender.com/health` → `{"status":"ok",
+  "checks":{"database":"ok","redis":"ok"}}`. Testei signup + criação de workspace reais via HTTPS
+  pública, e deletei o workspace de teste depois (soft-delete).
 
-1. ~~Push do commit~~ — resolvido (seção 1 acima), eu cuido disso sozinho agora.
-2. **Fase A - Banco Postgres gerenciado**: [neon.tech](https://neon.tech) ou
-   [supabase.com](https://supabase.com) (tier gratuito permanente). Copie a `DATABASE_URL`. No Supabase
-   use a conexão **direta** (porta `5432`), não o pooler da `6543` (ver README, seção Deploy).
-3. **Fase A - Redis gerenciado**: [upstash.com](https://upstash.com) (tier gratuito). Copie a
-   `REDIS_URL` na variante `rediss://` (com TLS). Me passe as duas strings (não persisto em lugar
-   nenhum do repo) e eu confirmo `prisma migrate deploy` + conectividade antes de você mexer no Render.
-4. **Serviço da API no Render**: New → Blueprint apontando pro repo — ele lê `render.yaml` sozinho e
-   cria o serviço `many-zac-api`. Preencha no painel (nunca vão pro git):
-   - `DATABASE_URL` (do passo 2) / `REDIS_URL` (do passo 3)
-   - `JWT_SECRET` → `openssl rand -base64 48` / `CREDENTIALS_ENCRYPTION_KEY` → `openssl rand -base64 32`
-   - `META_APP_SECRET` (Fase B) / `META_WEBHOOK_VERIFY_TOKEN` → `openssl rand -hex 16`
-   - `EXTERNAL_REQUEST_ALLOWED_HOSTS` → vazio bloqueia todo nó `external_request`; liste os hosts que
-     suas automações podem chamar, separados por vírgula, só quando precisar dessa feature
-   - `METRICS_TOKEN` → `openssl rand -hex 16`; sem isso `GET /metrics` fica inacessível (falha fechado)
-   - Se o serviço **já existir** de uma sessão anterior, só confirme que essas variáveis estão
-     preenchidas e que o deploy mais recente ficou verde.
-5. **Frontend na Vercel**: Add New → Project no mesmo repo, **Root Directory** = `apps/web`. Variáveis:
-   `API_URL` = URL pública do Render (passo 4); `APP_URL` = a própria URL que a Vercel vai te dar;
-   `META_APP_ID` = ID público do seu App (Fase B).
-6. **Fase B - App Meta real** (developers.facebook.com): criar o App (tipo Business) + produto
-   "Facebook Login", pegar `META_APP_ID`/`META_APP_SECRET`, registrar a Valid OAuth Redirect URI exata
-   (`https://<vercel>/api/oauth/meta/callback`), adicionar sua conta como tester.
-7. **Assinar o webhook**: no painel do App Meta → Webhooks → assinar `messages` apontando para
-   `https://<sua-api>.onrender.com/webhooks/meta`, usando o mesmo `META_WEBHOOK_VERIFY_TOKEN` do
-   passo 4.
-8. **Testar de verdade**: acessar a URL da Vercel, criar conta, workspace, e em "Canais" clicar
-   "Conectar com Facebook" (funciona sozinho se a conta tiver 1 Page só; mais de uma ainda usa o
-   formulário manual). Publicar uma automação simples, mandar uma DM de uma conta cadastrada como
-   tester do App e confirmar a resposta chegando.
+### Como eu tenho acesso de API agora (pra uma próxima sessão)
 
-Depois de qualquer um desses passos, me diga a URL pública da API (ex: `https://many-zac-api.onrender.com`)
-e eu confirmo o health check e ajudo a debugar qualquer erro de deploy/env var que aparecer nos logs do
-Render — isso eu consigo fazer via `curl`/leitura de logs, só não consigo entrar no painel.
+- **Render**: `~/.many-zac/render-api-key` (fora do repo). Uso: `curl -H "Authorization: Bearer $(cat
+  ~/.many-zac/render-api-key)" https://api.render.com/v1/services/srv-d9d958l7vvec73euu1d0/...` -
+  consigo listar/editar env vars (`GET`/`PUT .../env-vars`), disparar deploy (`POST .../deploys`), ler
+  logs (`GET /v1/logs?ownerId=tea-d9d90evaqgkc7382np4g&resource=srv-d9d958l7vvec73euu1d0`).
+- **Supabase**: `~/.many-zac/supabase-management-token`. Uso: `curl -H "Authorization: Bearer $(cat
+  ~/.many-zac/supabase-management-token)" https://api.supabase.com/v1/projects` - útil pra confirmar
+  region/host do pooler sem o usuário precisar navegar no painel.
+- Ambas as chaves foram compartilhadas em texto puro no chat em algum momento da sessão - o usuário
+  pode revogar/regenerar quando quiser (Render → Account Settings → API Keys; Supabase → Account →
+  Access Tokens), não afeta nada além de eu precisar de uma chave nova.
 
 ---
 
-## 3. Plano técnico do que falta (não depende de credenciais externas — posso fazer em uma próxima sessão)
+## 3. Fase B: pendente — só o usuário pode fazer
+
+1. **Frontend na Vercel**: Add New → Project apontando pro repo `RafaelZaccaro99/many-sac`,
+   **Root Directory** = `apps/web`. Variáveis: `API_URL` = `https://many-zac-api.onrender.com`;
+   `APP_URL` = a URL que a própria Vercel vai dar; `META_APP_ID` (do passo 2 abaixo).
+2. **App Meta real** (developers.facebook.com): criar o App (tipo Business) + produto "Facebook
+   Login", pegar `META_APP_ID`/`META_APP_SECRET`, registrar a Valid OAuth Redirect URI exata
+   (`https://<vercel>/api/oauth/meta/callback`), adicionar a própria conta como tester.
+3. Atualizar no Render (eu faço, só preciso do valor real): `META_APP_SECRET` está com um placeholder
+   (`"placeholder-until-meta-app-created"`) - trocar pelo valor real assim que o App existir.
+4. **Assinar o webhook**: painel do App Meta → Webhooks → assinar `messages` apontando para
+   `https://many-zac-api.onrender.com/webhooks/meta`, usando o `META_WEBHOOK_VERIFY_TOKEN` já
+   configurado no Render.
+5. **Testar de verdade**: acessar a URL da Vercel, criar conta, workspace, e em "Canais" clicar
+   "Conectar com Facebook" (funciona sozinho se a conta tiver 1 Page só). Publicar uma automação
+   simples, mandar uma DM de uma conta cadastrada como tester do App e confirmar a resposta chegando.
+
+---
+
+## 4. Plano técnico de código (todo feito - Fases C/D/E/F)
 
 ### Fase C — OAuth automático de canal: ✅ feito (2026-07-22)
 Botão "Conectar com Facebook" (`apps/api/src/channels/meta-oauth.service.ts` +
@@ -125,7 +140,7 @@ nenhum botão. Auto-organizar layout ficou fora (cosmético, não bloqueia uso).
 
 ---
 
-## 4. Checklist pra retomar numa próxima sessão
+## 5. Checklist pra retomar numa próxima sessão
 
 Se você (ou um agente) está lendo isto pra continuar o trabalho, nessa ordem:
 
