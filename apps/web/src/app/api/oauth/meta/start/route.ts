@@ -41,6 +41,12 @@ export async function GET(request: NextRequest) {
   dialogUrl.searchParams.set("redirect_uri", redirectUri);
   dialogUrl.searchParams.set("state", nonce);
   dialogUrl.searchParams.set("scope", META_SCOPES);
+  // Facebook silently reuses a permission decision from an earlier consent
+  // screen (e.g. an attempt that failed before the user saw pages_show_list/
+  // pages_messaging at all) instead of re-prompting. rerequest forces the
+  // dialog to ask again explicitly, which is required to actually grant a
+  // previously-skipped-or-declined permission.
+  dialogUrl.searchParams.set("auth_type", "rerequest");
 
   const response = NextResponse.redirect(dialogUrl);
   // Single-use CSRF token: the callback must see this exact nonce come back
