@@ -41,6 +41,8 @@ function buildService() {
   const prisma = {
     channelConnection: {
       findFirst: jest.fn().mockResolvedValue(CONNECTION),
+      findUnique: jest.fn().mockResolvedValue(null),
+      create: jest.fn(async ({ data }: any) => ({ id: "conn-new", ...data })),
     },
     $transaction: jest.fn(async (fn: any) => {
       const tx = {
@@ -92,8 +94,36 @@ function buildService() {
   const outboxService = new OutboxService(prisma);
 
   const service = new ChannelsService(prisma, auditService, credentialsCipher, metaAdapter, outboxService);
-  return { service, prisma, auditService, outboxCreateSpy };
+  return { service, prisma, auditService, outboxCreateSpy, metaAdapter };
 }
+
+describe("ChannelsService.connect", () => {
+  const CONNECT_DTO = {
+    provider: ChannelProvider.MESSENGER,
+    externalAccountId: "page-99",
+    displayName: "Página Nova",
+    accessToken: "page-token-99",
+  } as any;
+
+  it("subscribes the page to the app's webhook and reports it in the response", async () => {
+    const { service, metaAdapter } = buildService();
+    const subscribeSpy = jest.spyOn(metaAdapter, "subscribePageToApp").mockResolvedValue(undefined);
+
+    const result = await service.connect("ws-1", "user-1", CONNECT_DTO);
+
+    expect(subscribeSpy).toHaveBeenCalledWith("page-99", "page-token-99");
+    expect(result).toMatchObject({ externalAccountId: "page-99", webhookSubscribed: true });
+  });
+
+  it("still connects (webhookSubscribed: false) when the page subscription fails, e.g. a test token", async () => {
+    const { service, metaAdapter } = buildService();
+    jest.spyOn(metaAdapter, "subscribePageToApp").mockRejectedValue(new Error("Invalid OAuth access token"));
+
+    const result = await service.connect("ws-1", "user-1", CONNECT_DTO);
+
+    expect(result).toMatchObject({ externalAccountId: "page-99", webhookSubscribed: false, status: "ACTIVE" });
+  });
+});
 
 describe("ChannelsService.processInboundWebhook", () => {
   it("creates one contact for a new event, reports it as accepted, and enqueues the canonical outbox event", async () => {

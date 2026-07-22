@@ -116,6 +116,25 @@ export class MetaAdapter implements ChannelAdapter {
     };
   }
 
+  /**
+   * Subscribes the Page to this app so Meta starts delivering its message
+   * webhooks. The app-level subscription (callback URL + fields) only tells
+   * Meta *where* to deliver; each Page must additionally opt in via
+   * /{page-id}/subscribed_apps or its DMs never reach the webhook at all.
+   */
+  async subscribePageToApp(pageId: string, pageAccessToken: string): Promise<void> {
+    const url = `${GRAPH_API_BASE_URL}/${GRAPH_API_VERSION}/${encodeURIComponent(pageId)}/subscribed_apps`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${pageAccessToken}` },
+      body: JSON.stringify({ subscribed_fields: ["messages"] }),
+    });
+    const body = (await response.json().catch(() => ({}))) as { success?: boolean; error?: { message?: string } };
+    if (!response.ok || body.success !== true) {
+      throw new Error(`Meta page subscription failed: ${body.error?.message ?? "unknown error"}`);
+    }
+  }
+
   async sendMessage(input: SendMessageInput, credentials: string): Promise<SendMessageResult> {
     const message = input.attachmentUrl
       ? { attachment: { type: "image", payload: { url: input.attachmentUrl, is_reusable: true } } }

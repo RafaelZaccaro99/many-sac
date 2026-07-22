@@ -56,7 +56,27 @@ export class ChannelsService {
       metadata: { provider: dto.provider, externalAccountId: dto.externalAccountId },
     });
 
-    return { id: connection.id, provider: connection.provider, externalAccountId: connection.externalAccountId, status: connection.status };
+    // Best-effort: without this, Meta never delivers the Page's DMs to our
+    // webhook (the app-level subscription alone isn't enough). Non-fatal so a
+    // manual connect with a test token (local dev) still succeeds - the
+    // warning is the operator's cue if real messages aren't arriving.
+    let webhookSubscribed = false;
+    try {
+      await this.metaAdapter.subscribePageToApp(dto.externalAccountId, dto.accessToken);
+      webhookSubscribed = true;
+    } catch (err: any) {
+      this.logger.warn(
+        `Could not subscribe page ${dto.externalAccountId} to the app's webhook: ${err?.message ?? err}`,
+      );
+    }
+
+    return {
+      id: connection.id,
+      provider: connection.provider,
+      externalAccountId: connection.externalAccountId,
+      status: connection.status,
+      webhookSubscribed,
+    };
   }
 
   async listConnections(workspaceId: string) {

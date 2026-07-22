@@ -165,6 +165,39 @@ describe("MetaAdapter", () => {
     });
   });
 
+  describe("subscribePageToApp", () => {
+    const originalFetch = global.fetch;
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+    });
+
+    it("posts subscribed_fields=messages to the page with the page token", async () => {
+      const adapter = buildAdapter();
+      const fetchMock = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ success: true }) });
+      global.fetch = fetchMock as any;
+
+      await adapter.subscribePageToApp("page-1", "page-token");
+
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(String(url)).toContain("/page-1/subscribed_apps");
+      expect(init.headers.Authorization).toBe("Bearer page-token");
+      expect(JSON.parse(init.body)).toEqual({ subscribed_fields: ["messages"] });
+    });
+
+    it("throws with the Graph API error when the subscription is rejected", async () => {
+      const adapter = buildAdapter();
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({ error: { message: "Invalid OAuth access token" } }),
+      }) as any;
+
+      await expect(adapter.subscribePageToApp("page-1", "bad-token")).rejects.toThrow(
+        "Meta page subscription failed: Invalid OAuth access token",
+      );
+    });
+  });
+
   describe("getMessagingWindow", () => {
     it("is closed when there was never an inbound message", () => {
       const adapter = buildAdapter();
