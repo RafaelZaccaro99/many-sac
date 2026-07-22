@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { ChannelProvider } from "@prisma/client";
 import { GRAPH_API_BASE_URL, GRAPH_API_VERSION } from "./adapters/meta/meta.adapter";
@@ -19,6 +19,8 @@ interface MetaPage {
  */
 @Injectable()
 export class MetaOAuthService {
+  private readonly logger = new Logger(MetaOAuthService.name);
+
   constructor(
     private readonly configService: ConfigService,
     private readonly channelsService: ChannelsService,
@@ -83,7 +85,16 @@ export class MetaOAuthService {
   private async listPages(userAccessToken: string): Promise<MetaPage[]> {
     const params = new URLSearchParams({ access_token: userAccessToken });
     const body = await this.callGraphApi(`/me/accounts?${params.toString()}`);
-    return (body.data as MetaPage[]) ?? [];
+    const pages = (body.data as MetaPage[]) ?? [];
+    // Temporary diagnostic for the first real Meta App connect - /me/accounts
+    // can come back empty for reasons the "No Page found" error can't tell
+    // apart (no role on the app, Page owned by a Business Manager the account
+    // doesn't have Facebook-level access to, wrong permission granted at
+    // consent, etc). Logs page count/id/name only, never the token.
+    this.logger.log(
+      `/me/accounts returned ${pages.length} page(s): ${JSON.stringify(pages.map((p) => ({ id: p.id, name: p.name })))}`,
+    );
+    return pages;
   }
 
   private async callGraphApi(path: string): Promise<any> {
