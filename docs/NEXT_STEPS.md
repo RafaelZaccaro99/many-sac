@@ -4,10 +4,9 @@ Documento vivo — atualize/apague itens conforme forem resolvidos. Objetivo: qu
 (sua ou de um agente) consegue retomar o trabalho lendo só este arquivo, sem precisar reconstruir
 contexto a partir da conversa anterior.
 
-**Última atualização:** 2026-07-20, depois de M8 (Inbox) + M9 (Policy Engine) + **M10 (Observabilidade)**
-+ **todos os 11 tipos de nó do runtime** implementados. Commits `6e152f3` e `ae64f68` já confirmados no
-GitHub (push feito entre sessões). O trabalho de M10 (`/health` real, `/metrics`, logs JSON) desta sessão
-ainda está **local, não commitado** — ver seção 0.
+**Última atualização:** 2026-07-22, depois de M8 (Inbox) + M9 (Policy Engine) + M10 (Observabilidade) +
+**todos os 11 tipos de nó do runtime** implementados. Tudo commitado e no GitHub — `main` local e
+`origin/main` estão sincronizados no commit `d3a8fab`. Push agora funciona sozinho (ver seção 1).
 
 ## Estado atual em uma frase
 
@@ -20,37 +19,24 @@ ver Fase 7.
 
 ---
 
-## 0. Ação pendente desta sessão: commitar M10 (Observabilidade)
+## 1. Push para o GitHub: resolvido de forma permanente (2026-07-22)
 
-Ainda não commitei o trabalho desta sessão (`/health` real, `/metrics`, `JsonLogger`, `METRICS_TOKEN`/
-`EXTERNAL_REQUEST_ALLOWED_HOSTS` no `render.yaml`). Se você está lendo isto e não pediu explicitamente
-pra eu commitar antes de parar, rode:
+Este repositório agora tem uma **deploy key SSH dedicada** (só para este repo, com escrita habilitada),
+configurada em `git config core.sshCommand` (local a este repo, não afeta SSH em nenhum outro lugar da
+sua máquina). Isso significa que **eu consigo dar `git push` sozinho** a partir de agora, sem depender
+de você rodar o push manualmente.
 
-```bash
-cd "/Users/rafaelzaccaro/MANY ZAC"
-git status --short   # confira o que está pendente antes de decidir
-git add -A            # ou liste os arquivos manualmente
-git commit -m "Add M10 observability: real /health, /metrics, JSON logging"
-git push origin main  # eu não consigo fazer isso - ver seção 1
-```
+Detalhes técnicos, caso precise recriar isso numa máquina nova:
+- Chave privada: `~/.ssh/id_ed25519_manyzac` (sem senha, só usada por este repo)
+- Configurado via `git config core.sshCommand "ssh -i ~/.ssh/id_ed25519_manyzac -o IdentitiesOnly=yes"`
+- Remote trocado de HTTPS para SSH: `git@github.com:RafaelZaccaro99/many-sac.git`
+- Chave pública adicionada em https://github.com/RafaelZaccaro99/many-sac/settings/keys como Deploy Key
+  com "Allow write access" marcado
 
-Ou simplesmente peça "commite e dê push" na próxima sessão - eu comito, e o push você confirma como já
-fez das últimas vezes (seção 1 explica por quê).
-
----
-
-## 1. Por que eu não consigo dar `git push` sozinho
-
-Este ambiente de sessão não tem nenhuma credencial do GitHub configurada (nem token HTTPS salvo no
-keychain, nem chave SSH) - toda tentativa de `git push` falha com:
-
-```
-fatal: could not read Username for 'https://github.com': Device not configured
-```
-
-Da última vez isso foi resolvido rodando `git push origin main` de um terminal seu onde o GitHub já
-funciona. Se quiser que eu não dependa disso toda sessão, veja a seção **"Se quiser me dar acesso de
-push"** no final deste documento.
+Se por algum motivo o push voltar a falhar (ex: ambiente novo, chave revogada), o sintoma será algo como
+`Permission denied (publickey)` ou (se o remote voltar a ser HTTPS) `could not read Username for
+'https://github.com'`. Nesse caso, repita o processo: gerar uma chave nova, pedir pro usuário adicionar
+como Deploy Key no repo, reconfigurar `core.sshCommand` e o remote.
 
 ---
 
@@ -59,7 +45,7 @@ push"** no final deste documento.
 Nenhuma delas é código — são contas/credenciais externas que exigem seu login em painéis de terceiros.
 Ordem sugerida:
 
-1. **Push do commit** (seção 1 acima) — sem isso nada do resto se move.
+1. ~~Push do commit~~ — resolvido (seção 1 acima), eu cuido disso sozinho agora.
 2. **Banco Postgres gerenciado**: [neon.tech](https://neon.tech) ou [supabase.com](https://supabase.com)
    (tier gratuito permanente). Copie a `DATABASE_URL`. No Supabase use a conexão **direta** (porta
    `5432`), não o pooler da `6543` (ver README, seção Deploy, pra entender por quê).
@@ -144,8 +130,8 @@ provar o adapter/webhook mas não é o fluxo de conexão final para um cliente r
 
 Se você (ou um agente) está lendo isto pra continuar o trabalho, nessa ordem:
 
-1. `git log origin/main -1` e compare com o `git log -1` local — confirme se há commits locais ainda
-   não empurrados (ver seção 0/1 acima).
+1. `git log origin/main -1` e compare com o `git log -1` local — confirme que estão sincronizados (o
+   push agora é automático via deploy key, mas confira mesmo assim se algo mudou fora desta sessão).
 2. Rode `npm run test:api` na raiz — deve dar 174/174 (ou mais, se novas fases já entraram). Se não
    bater, algo mudou fora desta sessão; investigue antes de continuar.
 3. Decida: seguir pra seção 2 (deploy) ou seção 3 (fases técnicas, agora só Fase 7 e 8)? Pergunte ao
@@ -153,18 +139,3 @@ Se você (ou um agente) está lendo isto pra continuar o trabalho, nessa ordem:
 4. Se for continuar a Fase 7/8: siga o mesmo padrão já estabelecido no projeto — implementar, escrever
    teste, validar contra Postgres/Redis reais (não só mock), atualizar `README.md` e `docs/ROADMAP.md`
    no mesmo commit/sessão. Não deixe a documentação dessincronizar do código.
-
----
-
-## Se quiser me dar acesso de push
-
-Pra eu não depender de você rodar `git push` manualmente toda sessão, existem duas opções — nenhuma
-delas eu posso configurar sozinho por segurança (envolve credenciais), mas documento aqui pra você
-decidir:
-
-- **Personal Access Token do GitHub** com escopo `repo`, exportado como variável de ambiente
-  (`GIT_ASKPASS` ou credential helper) no ambiente onde as sessões rodam. Eu nunca veria o token em
-  texto puro na conversa, só o usaria via o mecanismo de credencial do git.
-- **`gh auth login`** rodado por você uma vez neste ambiente, se ele persistir entre sessões.
-
-Isso é opcional — o fluxo atual (eu committo, você dá push) funciona, só tem uma etapa manual a mais.
