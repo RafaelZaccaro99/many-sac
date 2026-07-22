@@ -5,7 +5,13 @@ import { SESSION_COOKIE } from "@/lib/session";
 import { OAUTH_STATE_COOKIE } from "@/lib/oauth";
 
 const GRAPH_API_VERSION = "v19.0";
-const META_SCOPES = "pages_show_list,pages_messaging,instagram_basic,instagram_manage_messages,pages_read_engagement";
+// Instagram scopes intentionally left out: the automatic connect flow only
+// ever creates a MESSENGER connection from a Facebook Page (see
+// MetaOAuthService.connectFromCode), and instagram_basic/instagram_manage_messages
+// require the separate Instagram Graph API product to be configured on the
+// app - requesting them here fails the dialog with "Invalid Scopes" for any
+// app that hasn't set that product up.
+const META_SCOPES = "pages_show_list,pages_messaging,pages_read_engagement";
 
 /**
  * Kicks off the Meta OAuth dialog with a real top-level browser redirect -
