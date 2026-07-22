@@ -31,14 +31,25 @@ export class ContactsService {
     return contact;
   }
 
-  async list(workspaceId: string, take = 50, skip = 0) {
-    return this.prisma.contact.findMany({
+  async list(workspaceId: string, take = 50, cursor?: string) {
+    const limit = Math.min(take, 200);
+    const items = await this.prisma.contact.findMany({
       where: { workspaceId },
       orderBy: { createdAt: "desc" },
-      take: Math.min(take, 200),
-      skip,
+      // Cursor by id works correctly even though orderBy is on createdAt - id
+      // is unique, so it unambiguously identifies where the previous page
+      // ended, unlike offset/skip which drifts if rows are inserted between
+      // page requests.
+      take: limit + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
       include: { tags: { include: { tag: true } } },
     });
+
+    const hasMore = items.length > limit;
+    const page = hasMore ? items.slice(0, limit) : items;
+    const nextCursor = hasMore ? page[page.length - 1].id : null;
+
+    return { items: page, nextCursor };
   }
 
   async getOne(workspaceId: string, contactId: string) {

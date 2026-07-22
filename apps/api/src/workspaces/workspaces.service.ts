@@ -62,10 +62,32 @@ export class WorkspacesService {
 
   async listForUser(userId: string) {
     const memberships = await this.prisma.workspaceMember.findMany({
-      where: { userId },
+      where: { userId, workspace: { deletedAt: null } },
       include: { workspace: true },
     });
     return memberships.map((m) => ({ ...m.workspace, myRole: m.role }));
+  }
+
+  async softDelete(workspaceId: string, actorUserId: string) {
+    const workspace = await this.prisma.workspace.findUnique({ where: { id: workspaceId } });
+    if (!workspace || workspace.deletedAt) {
+      throw new NotFoundException("Workspace not found");
+    }
+
+    const updated = await this.prisma.workspace.update({
+      where: { id: workspaceId },
+      data: { deletedAt: new Date() },
+    });
+
+    await this.auditService.record({
+      workspaceId,
+      actorUserId,
+      action: "workspace.deleted",
+      targetType: "Workspace",
+      targetId: workspaceId,
+    });
+
+    return updated;
   }
 
   async listMembers(workspaceId: string) {

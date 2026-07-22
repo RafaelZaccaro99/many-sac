@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import ReactFlow, {
   Background,
   Connection,
@@ -147,6 +147,18 @@ export function FlowBuilder({
     setSaveMessage("Rascunho salvo.");
     return true;
   }
+
+  // Cmd/Ctrl+S saves the draft instead of triggering the browser's "Save page" dialog.
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+        e.preventDefault();
+        void saveDraft();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  });
 
   async function validate() {
     const savedOk = await saveDraft();

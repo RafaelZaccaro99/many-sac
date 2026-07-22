@@ -41,10 +41,17 @@ export class WorkspaceRolesGuard implements CanActivate {
 
     const membership = await this.prisma.workspaceMember.findUnique({
       where: { workspaceId_userId: { workspaceId, userId } },
+      include: { workspace: { select: { deletedAt: true } } },
     });
 
     if (!membership || !allowedRoles.includes(membership.role)) {
       throw new ForbiddenException("You do not have permission to perform this action in this workspace");
+    }
+    if (membership.workspace.deletedAt) {
+      // Single choke point: every workspace-scoped route passes through this
+      // guard, so a soft-deleted workspace becomes inaccessible everywhere
+      // without each controller needing its own check.
+      throw new ForbiddenException("This workspace has been deleted");
     }
 
     request.workspaceMembership = membership;

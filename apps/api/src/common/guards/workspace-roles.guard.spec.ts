@@ -68,11 +68,28 @@ describe("WorkspaceRolesGuard", () => {
       getAllAndOverride: jest.fn().mockReturnValue([WorkspaceRole.OWNER, WorkspaceRole.ADMIN]),
     } as unknown as Reflector;
     const prisma = {
-      workspaceMember: { findUnique: jest.fn().mockResolvedValue({ role: WorkspaceRole.ADMIN }) },
+      workspaceMember: {
+        findUnique: jest.fn().mockResolvedValue({ role: WorkspaceRole.ADMIN, workspace: { deletedAt: null } }),
+      },
     } as any;
     const guard = new WorkspaceRolesGuard(reflector, prisma);
 
     const ctx = buildContext({ workspaceId: "ws-1" }, { id: "user-1" });
     await expect(guard.canActivate(ctx)).resolves.toBe(true);
+  });
+
+  it("rejects access to a soft-deleted workspace even for a member with an allowed role", async () => {
+    const reflector = {
+      getAllAndOverride: jest.fn().mockReturnValue([WorkspaceRole.OWNER, WorkspaceRole.ADMIN]),
+    } as unknown as Reflector;
+    const prisma = {
+      workspaceMember: {
+        findUnique: jest.fn().mockResolvedValue({ role: WorkspaceRole.OWNER, workspace: { deletedAt: new Date() } }),
+      },
+    } as any;
+    const guard = new WorkspaceRolesGuard(reflector, prisma);
+
+    const ctx = buildContext({ workspaceId: "ws-1" }, { id: "user-1" });
+    await expect(guard.canActivate(ctx)).rejects.toBeInstanceOf(ForbiddenException);
   });
 });

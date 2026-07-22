@@ -82,21 +82,30 @@ Next.js vai na **Vercel**, que tem suporte nativo a Next.js e é mais simples pr
 1. **Add New → Project**, aponte para o mesmo repositório.
 2. Em **Root Directory**, selecione `apps/web` (é um monorepo com npm workspaces — a Vercel detecta o
    Next.js sozinha a partir daí).
-3. Em **Environment Variables**, adicione `API_URL` = a URL do Render do passo anterior.
+3. Em **Environment Variables**, adicione:
+   - `API_URL` = a URL do Render do passo anterior
+   - `APP_URL` = a URL que a Vercel vai te dar (ex: `https://many-zac.vercel.app`) — usada para montar o
+     `redirect_uri` exato do OAuth (precisa bater com o cadastrado no App da Meta no passo 5)
+   - `META_APP_ID` = o ID do seu App (público, não é segredo)
 4. Deploy. Anote a URL que a Vercel deu (ex: `https://many-zac.vercel.app`).
 
-### 5. Webhook real na Meta
+### 5. Webhook e OAuth reais na Meta
 
-No painel da Meta (developers.facebook.com → seu App → Webhooks), assine `messages` para
-Instagram/Messenger apontando para `https://<sua-api>.onrender.com/webhooks/meta`, usando o mesmo
-`META_WEBHOOK_VERIFY_TOKEN` do passo 3.
+No painel da Meta (developers.facebook.com → seu App):
+- **Webhooks**: assine `messages` para Instagram/Messenger apontando para
+  `https://<sua-api>.onrender.com/webhooks/meta`, usando o mesmo `META_WEBHOOK_VERIFY_TOKEN` do passo 3.
+- **Facebook Login → Configurações**: registre a Valid OAuth Redirect URI exata:
+  `https://<sua-vercel>/api/oauth/meta/callback` (precisa bater byte a byte com o `APP_URL` configurado
+  na Vercel).
 
 ### 6. Conectar e testar
 
-Acesse a URL da Vercel, crie sua conta, workspace, e em **Canais** cole o ID da sua Page/conta do
-Instagram e o access token real (gerado no painel da Meta). Publique uma automação com um gatilho e um
-nó de mensagem, mande uma DM de verdade para a conta conectada (de uma conta cadastrada como tester no
-seu App, se ele ainda estiver em modo desenvolvimento) e veja a resposta chegar de verdade.
+Acesse a URL da Vercel, crie sua conta e workspace. Em **Canais**, clique **"Conectar com Facebook"** —
+funciona automaticamente se a conta tiver uma única Page conectada (mais de uma Page ainda precisa do
+formulário manual: colar o ID da Page/conta do Instagram e o access token real, gerado no painel da
+Meta). Publique uma automação com um gatilho e um nó de mensagem, mande uma DM de verdade para a conta
+conectada (de uma conta cadastrada como tester no seu App, se ele ainda estiver em modo
+desenvolvimento) e veja a resposta chegar de verdade.
 
 **Limitação do plano gratuito do Render:** o serviço dorme após ~15 min sem tráfego e demora alguns
 segundos para acordar na próxima requisição — aceitável para testar, mas para confiabilidade (ex: um
@@ -137,10 +146,15 @@ npm run build:api
 - `GET /health` checa Postgres e Redis de verdade (não só "o processo está de pé"), retornando 503 com o detalhamento de qual dependência caiu — é o que o `healthCheckPath` do Render usa pra decidir se um deploy está saudável
 - `GET /metrics` (`apps/api/src/observability/`, protegido por `METRICS_TOKEN` no header `X-Metrics-Token`, falha fechado se não configurado): execuções por status, profundidade da fila de execução e da dead-letter queue, backlog do outbox, total de negações do Policy Engine
 - Logs estruturados em JSON quando `NODE_ENV=production` (`JsonLogger`, uma linha JSON por evento) — o dev local continua com o logger colorido padrão do Nest
+- Conectar um canal agora pode ser "clique e autorize": botão "Conectar com Facebook" (`apps/api/src/channels/meta-oauth.service.ts` + rotas em `apps/web/src/app/api/oauth/meta/`) troca o fluxo OAuth2 da Meta por um canal conectado automaticamente quando a conta tem uma única Page — cobre o caso comum sem exigir copiar/colar um access token manualmente
+- Exclusão de workspace (soft-delete): `DELETE /workspaces/:id`, exclusiva do Owner — o `WorkspaceRolesGuard` rejeita qualquer rota de um workspace já deletado, e ele some da listagem (`GET /workspaces`) sem apagar os dados de verdade
+- Paginação por cursor em `GET /contacts` (query params `take`/`cursor`, resposta `{items, nextCursor}`) — não degrada com volume grande de contatos como offset/skip degradava
+- Atalho `Cmd/Ctrl+S` no Flow Builder salva o rascunho sem precisar clicar no botão
 - Deploy pronto para produção via [render.yaml](render.yaml) (ver seção Deploy abaixo) — necessário para testar com um número/conta real, já que a Meta não chama `localhost`
 
 ## O que ainda não existe (não alegar pronto)
 
+- O "Conectar com Facebook" automático só cobre contas com **uma Page só**; múltiplas Pages caem de volta no formulário manual (colar ID + token) — não existe tela de escolha de Page
 - `start_another_flow` só impede o caso mais óbvio de auto-loop (uma automação apontando direto para si mesma); um ciclo indireto (A inicia B, B inicia A) não é detectado e pode gerar execuções em cascata
 - `EXTERNAL_REQUEST_ALLOWED_HOSTS` é uma allow-list global por deploy, não por workspace — qualquer Builder em qualquer workspace pode chamar qualquer host que o operador já tenha liberado; não há isolamento por workspace nem proteção contra DNS rebinding (um host allow-listado cuja resolução de DNS mude para um IP interno não é bloqueado)
 - Uma nova mensagem do contato pode disparar uma automação nova mesmo enquanto a conversa está em atendimento humano (`HUMAN`/`WAITING_HUMAN`) — o `TriggerMatcherService` ainda não considera o status da conversa antes de abrir uma nova execução (o `send_message` dessa nova execução seria bloqueado pelo Policy Engine só se o contato tiver de fato opinado out — não é um gate específico para "está em atendimento humano")
@@ -227,10 +241,26 @@ falha do `/health` (Postgres ou Redis fora do ar) tem cobertura de teste unitár
 código, não uma reimplementação em mock — provocar uma queda de verdade do banco/Redis locais arriscaria
 desestabilizar o ambiente usado pelo resto da sessão.
 
+**OAuth automático de canal validado com chamadas reais a `facebook.com` e `graph.facebook.com`**
+(2026-07-22): cliquei "Conectar com Facebook" no navegador real — o `start` gerou a URL do dialog OAuth
+e navegou de verdade pro `facebook.com` (recebeu a página real "ID do app inválido", esperado com um
+App de teste). Testei o `callback`: com `state` incompatível com o cookie, rejeitou por CSRF antes de
+chamar qualquer coisa; com o `state` certo, chamou o endpoint `oauth/exchange` da API, que fez uma
+chamada real pra `graph.facebook.com/oauth/access_token` e recebeu de volta o erro real da Meta
+("Missing or invalid client id" - nosso App de teste não existe de verdade), propagado como mensagem
+clara na tela. Prova a mesma coisa que o `MetaAdapter.sendMessage` já provava: a integração está
+correta de ponta a ponta, só falta um App Meta aprovado de verdade pra completar com sucesso.
+
+**Exclusão de workspace, paginação por cursor e atalho de teclado validados contra a API/UI reais**
+(2026-07-22): `DELETE /workspaces/:id` marcou `deletedAt`, sumiu de `GET /workspaces`, e uma tentativa
+seguinte de acessar ou deletar de novo voltou 403 "This workspace has been deleted" — confirmando que o
+`WorkspaceRolesGuard` bloqueia num ponto só. Criei 5 contatos reais e paginei com `take=2` em 3 chamadas
+seguidas usando o `cursor` retornado a cada vez: sem repetir nem pular nenhum, e a última página voltou
+`nextCursor: null`. No Flow Builder, `Ctrl+S` mostrou "Rascunho salvo." sem eu clicar no botão.
+
 ## Limitações conhecidas
 
-- Sem OAuth real com a Meta: conexão de canal é manual (`POST /workspaces/:id/channels`), recebendo um token que você já obteve fora do fluxo. Isso é aceitável para provar o adapter e o webhook, mas não é o fluxo de conexão final.
-- Sem exclusão de workspace (ação exclusiva do Owner) — deliberadamente fora de escopo por ser uma operação destrutiva; entra num marco dedicado com soft-delete/anonimização.
-- Sem paginação por cursor em `GET /contacts` (usa offset/limit) — trocar antes de ter volume real de contatos.
+- OAuth com a Meta cobre só o caso de 1 Page por conta (ver "O que ainda não existe" acima); o formulário manual (`POST /workspaces/:id/channels`, colando um token já obtido fora do fluxo) continua existindo para os demais casos.
+- Exclusão de workspace é soft-delete puro (marca `deletedAt`, some da listagem, fica inacessível) — não anonimiza PII nem purga dados de verdade; isso vira um item futuro se for necessário por compliance (ex: direito ao esquecimento).
 - Retry de `send_message` pode reenviar uma mensagem que na verdade já saiu (se a falha ocorreu depois do envio mas antes de registrar sucesso) — semântica "at least once" reconhecida, sem idempotency key do lado da Meta ainda.
 - Uma falha da Graph API na resposta manual do Inbox (`POST .../conversations/:id/messages`) sobe como 500 genérico — não há um exception filter traduzindo o erro do adapter para um 4xx/5xx específico; o texto digitado não é perdido (fica no campo), mas a mensagem de erro não diz "a Meta recusou o envio". Mesmo padrão já existia no runtime (o job só reflete "falhou", sem detalhar por quê, fora do log).

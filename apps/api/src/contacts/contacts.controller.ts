@@ -35,8 +35,8 @@ export class ContactsController {
 
   @WorkspaceRoles(...READ_ROLES)
   @Get("contacts")
-  list(@Param("workspaceId") workspaceId: string, @Query("take") take?: string, @Query("skip") skip?: string) {
-    return this.contactsService.list(workspaceId, take ? Number(take) : undefined, skip ? Number(skip) : undefined);
+  list(@Param("workspaceId") workspaceId: string, @Query("take") take?: string, @Query("cursor") cursor?: string) {
+    return this.contactsService.list(workspaceId, take ? Number(take) : undefined, cursor);
   }
 
   @WorkspaceRoles(...READ_ROLES)

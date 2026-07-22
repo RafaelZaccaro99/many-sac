@@ -16,8 +16,8 @@ import {
 // (and ultimately be superseded by the versioned Policy Engine planned for a later
 // milestone) rather than assumed elsewhere in the codebase.
 const STANDARD_MESSAGING_WINDOW_MS = 24 * 60 * 60 * 1000;
-const GRAPH_API_VERSION = "v19.0";
-const GRAPH_API_BASE_URL = "https://graph.facebook.com";
+export const GRAPH_API_VERSION = "v19.0";
+export const GRAPH_API_BASE_URL = "https://graph.facebook.com";
 
 interface MetaMessagingEvent {
   sender?: { id?: string };

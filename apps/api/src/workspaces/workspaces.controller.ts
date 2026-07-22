@@ -78,4 +78,11 @@ export class WorkspacesController {
   ) {
     return this.workspacesService.removeMember(workspaceId, user.id, targetUserId);
   }
+
+  @UseGuards(WorkspaceRolesGuard)
+  @WorkspaceRoles(WorkspaceRole.OWNER)
+  @Delete("workspaces/:workspaceId")
+  softDelete(@Param("workspaceId") workspaceId: string, @CurrentUser() user: RequestUser) {
+    return this.workspacesService.softDelete(workspaceId, user.id);
+  }
 }

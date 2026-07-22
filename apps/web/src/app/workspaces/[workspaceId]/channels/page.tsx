@@ -11,7 +11,13 @@ interface ChannelConnection {
   createdAt: string;
 }
 
-export default async function ChannelsPage({ params }: { params: { workspaceId: string } }) {
+export default async function ChannelsPage({
+  params,
+  searchParams,
+}: {
+  params: { workspaceId: string };
+  searchParams: { connected?: string; oauthError?: string };
+}) {
   const connections = await serverApiFetch<ChannelConnection[]>(`/workspaces/${params.workspaceId}/channels`);
 
   return (
@@ -27,6 +33,15 @@ export default async function ChannelsPage({ params }: { params: { workspaceId: 
           </Link>
         </div>
       </div>
+
+      {searchParams.connected && (
+        <p className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700">
+          Canal conectado com sucesso via Facebook.
+        </p>
+      )}
+      {searchParams.oauthError && (
+        <p className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{searchParams.oauthError}</p>
+      )}
 
       <div className="mb-8">
         <ConnectChannelForm workspaceId={params.workspaceId} />
