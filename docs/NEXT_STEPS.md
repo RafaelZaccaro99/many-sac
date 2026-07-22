@@ -7,7 +7,8 @@ contexto a partir da conversa anterior.
 **Última atualização:** 2026-07-22. Plano técnico completo (Fases C/D/E/F) feito. **Fase A também está
 feita: a API está no ar de verdade em produção** (`https://many-zac-api.onrender.com`), com Postgres
 (Supabase) e Redis (Upstash) reais - `/health` confirma os dois, e um signup/workspace real de teste
-funcionou via HTTPS pública. Só resta a **Fase B** (App Meta real + deploy do frontend na Vercel).
+funcionou via HTTPS pública. **O frontend também está no ar na Vercel**
+(`https://many-zac.vercel.app`), validado no navegador real. Só resta o **App Meta real** (seção 3).
 
 **Nota operacional 1**: o Postgres local (porta 5433) parou de existir entre sessões (o diretório de
 dados anterior sumiu - provavelmente estava em `/tmp` ou similar). Recriei em `~/.many-zac/pgdata`
@@ -29,8 +30,9 @@ Account → Access Tokens) se preferir não deixá-las de pé.
 O produto funciona de ponta a ponta contra Postgres/Redis/BullMQ reais **e agora também está de pé em
 produção de verdade** (Render + Supabase + Upstash) - `/health` e um signup/workspace reais confirmaram
 isso via HTTPS pública, não só localhost. M0 a M10 do `docs/ROADMAP.md` estão todos feitos, todo o plano
-técnico que eu conseguia fazer sozinho está feito, e a Fase A (infra gerenciada) também está feita. Só
-falta a Fase B: criar o App real na Meta e subir o frontend na Vercel.
+técnico que eu conseguia fazer sozinho está feito, a Fase A (infra gerenciada) está feita, e o frontend
+está no ar na Vercel (`https://many-zac.vercel.app`). Só falta criar o App real na Meta e fazer o teste
+de ponta a ponta com DM de verdade.
 
 ---
 
@@ -86,22 +88,41 @@ como Deploy Key no repo, reconfigurar `core.sshCommand` e o remote.
 
 ---
 
-## 3. Fase B: pendente — só o usuário pode fazer
+## 3. Fase B: frontend na Vercel ✅ feito (2026-07-22) — falta só o App Meta
 
-1. **Frontend na Vercel**: Add New → Project apontando pro repo `RafaelZaccaro99/many-sac`,
-   **Root Directory** = `apps/web`. Variáveis: `API_URL` = `https://many-zac-api.onrender.com`;
-   `APP_URL` = a URL que a própria Vercel vai dar; `META_APP_ID` (do passo 2 abaixo).
-2. **App Meta real** (developers.facebook.com): criar o App (tipo Business) + produto "Facebook
+**Frontend está no ar**: `https://many-zac.vercel.app`. Validado no navegador real contra a API de
+produção: signup → login automático → criar workspace → navegar até Automações, tudo funcionando.
+O workspace de teste foi soft-deletado depois.
+
+- Projeto Vercel: `many-sac` (`prj_J8wk5nWzEtnmB8BPvnd1rXNGEITJ`), Root Directory `apps/web`,
+  framework Next.js. **Cuidado**: o projeto tinha sido criado pelo usuário com Root Directory
+  `apps/api` (por isso o primeiro build falhou compilando a API sem `prisma generate`) - corrigido
+  via API.
+- Env vars: `API_URL` = `https://many-zac-api.onrender.com` (production+preview), `APP_URL` =
+  `https://many-zac.vercel.app` (production). `META_APP_ID` ainda **não** setada (App Meta não existe).
+- **Acesso de API**: token em `~/.many-zac/vercel-token` (`chmod 600`, fora do repo, expira ~90 dias).
+  Uso: `curl -H "Authorization: Bearer $(cat ~/.many-zac/vercel-token)" https://api.vercel.com/v9/projects/...`
+  - consigo editar config do projeto, env vars (`/v10/projects/<id>/env`), disparar deploy
+  (`POST /v13/deployments` com `gitSource` do repo `RafaelZaccaro99/many-sac`, repoId `1304335443`)
+  e ler status/logs. Mesma ressalva das outras chaves: passou em texto puro no chat, revogável em
+  vercel.com/account/settings/tokens.
+
+### O que ainda falta (App Meta - só o usuário pode criar)
+
+1. **App Meta real** (developers.facebook.com): criar o App (tipo Business) + produto "Facebook
    Login", pegar `META_APP_ID`/`META_APP_SECRET`, registrar a Valid OAuth Redirect URI exata
-   (`https://<vercel>/api/oauth/meta/callback`), adicionar a própria conta como tester.
-3. Atualizar no Render (eu faço, só preciso do valor real): `META_APP_SECRET` está com um placeholder
-   (`"placeholder-until-meta-app-created"`) - trocar pelo valor real assim que o App existir.
-4. **Assinar o webhook**: painel do App Meta → Webhooks → assinar `messages` apontando para
+   (`https://many-zac.vercel.app/api/oauth/meta/callback`), adicionar a própria conta como tester.
+2. Com os valores em mãos, eu configuro (via API): `META_APP_ID` na Vercel + redeploy, e
+   `META_APP_SECRET` no Render (hoje está com placeholder `"placeholder-until-meta-app-created"`).
+3. **Assinar o webhook**: painel do App Meta → Webhooks → assinar `messages` apontando para
    `https://many-zac-api.onrender.com/webhooks/meta`, usando o `META_WEBHOOK_VERIFY_TOKEN` já
    configurado no Render.
-5. **Testar de verdade**: acessar a URL da Vercel, criar conta, workspace, e em "Canais" clicar
-   "Conectar com Facebook" (funciona sozinho se a conta tiver 1 Page só). Publicar uma automação
-   simples, mandar uma DM de uma conta cadastrada como tester do App e confirmar a resposta chegando.
+4. **Testar de verdade**: em `https://many-zac.vercel.app`, criar conta, workspace, e em "Canais"
+   clicar "Conectar com Facebook" (funciona sozinho se a conta tiver 1 Page só). Publicar uma
+   automação simples, mandar uma DM de uma conta cadastrada como tester do App e confirmar a
+   resposta chegando. (O achado de code review sobre roteamento de webhook por provider já foi
+   corrigido e validado - ver ADR de 2026-07-22 no `docs/ROADMAP.md` - então uma falha aqui deve
+   ser de configuração da Meta mesmo, não desse bug.)
 
 ---
 

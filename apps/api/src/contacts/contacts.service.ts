@@ -35,7 +35,10 @@ export class ContactsService {
     const limit = Math.min(take, 200);
     const items = await this.prisma.contact.findMany({
       where: { workspaceId },
-      orderBy: { createdAt: "desc" },
+      // The id tiebreaker keeps ordering deterministic when two contacts share
+      // the same createdAt (e.g. batch imports) - without it, rows on a page
+      // boundary could repeat or be skipped between requests.
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       // Cursor by id works correctly even though orderBy is on createdAt - id
       // is unique, so it unambiguously identifies where the previous page
       // ended, unlike offset/skip which drifts if rows are inserted between

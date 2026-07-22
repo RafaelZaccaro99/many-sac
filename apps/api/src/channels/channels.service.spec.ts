@@ -7,10 +7,12 @@ import { CredentialsCipher } from "./credentials-cipher";
 import { OutboxService } from "../events/outbox.service";
 import { EventType } from "../events/event-types";
 
+// A MESSENGER connection on purpose: webhook routing must find it by
+// externalAccountId alone, not by assuming the adapter's INSTAGRAM provider.
 const CONNECTION = {
   id: "conn-1",
   workspaceId: "ws-1",
-  provider: ChannelProvider.INSTAGRAM,
+  provider: ChannelProvider.MESSENGER,
   externalAccountId: "page-123",
   status: ChannelConnectionStatus.ACTIVE,
 };
@@ -38,7 +40,7 @@ function buildService() {
 
   const prisma = {
     channelConnection: {
-      findUnique: jest.fn().mockResolvedValue(CONNECTION),
+      findFirst: jest.fn().mockResolvedValue(CONNECTION),
     },
     $transaction: jest.fn(async (fn: any) => {
       const tx = {
@@ -106,6 +108,12 @@ describe("ChannelsService.processInboundWebhook", () => {
       workspaceId: "ws-1",
       eventType: EventType.CONTACT_MESSAGE_RECEIVED,
     });
+    // Routing must not pin the lookup to a provider: Messenger entries carry the
+    // Page id while Instagram entries carry the IG account id, so the id alone
+    // is the routing key.
+    expect(prisma.channelConnection.findFirst).toHaveBeenCalledWith({
+      where: { externalAccountId: "page-123" },
+    });
   });
 
   it("does not create a duplicate contact or outbox event when the same webhook is replayed", async () => {
@@ -153,7 +161,7 @@ describe("ChannelsService.processInboundWebhook", () => {
 
   it("counts events for unknown external accounts without touching contacts", async () => {
     const { service, prisma, outboxCreateSpy } = buildService();
-    prisma.channelConnection.findUnique.mockResolvedValue(null);
+    prisma.channelConnection.findFirst.mockResolvedValue(null);
 
     const result = await service.processInboundWebhook(META_PAYLOAD);
 

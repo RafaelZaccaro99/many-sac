@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, UseGuards } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, UseGuards } from "@nestjs/common";
 import { WorkspaceRole } from "@prisma/client";
 import { ContactsService } from "./contacts.service";
 import { CreateContactDto } from "./dto/create-contact.dto";
@@ -36,7 +36,14 @@ export class ContactsController {
   @WorkspaceRoles(...READ_ROLES)
   @Get("contacts")
   list(@Param("workspaceId") workspaceId: string, @Query("take") take?: string, @Query("cursor") cursor?: string) {
-    return this.contactsService.list(workspaceId, take ? Number(take) : undefined, cursor);
+    let parsedTake: number | undefined;
+    if (take !== undefined) {
+      parsedTake = Number(take);
+      if (!Number.isInteger(parsedTake) || parsedTake < 1) {
+        throw new BadRequestException("take must be a positive integer");
+      }
+    }
+    return this.contactsService.list(workspaceId, parsedTake, cursor);
   }
 
   @WorkspaceRoles(...READ_ROLES)

@@ -1,5 +1,5 @@
 import { ConflictException, Injectable, Logger } from "@nestjs/common";
-import { ChannelConnectionStatus, Prisma } from "@prisma/client";
+import { ChannelConnectionStatus, ChannelProvider, Prisma } from "@prisma/client";
 import * as crypto from "crypto";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../common/audit/audit.service";
@@ -89,10 +89,12 @@ export class ChannelsService {
     const result: ProcessWebhookResult = { accepted: 0, duplicates: 0, unknownAccount: 0 };
 
     for (const event of events) {
-      const connection = await this.prisma.channelConnection.findUnique({
-        where: {
-          provider_externalAccountId: { provider: this.metaAdapter.provider, externalAccountId: event.externalAccountId },
-        },
+      // Route by externalAccountId alone: Meta webhook entries carry the Page id
+      // for Messenger events but the IG business account id for Instagram ones,
+      // so pinning the lookup to one provider would make the other unreachable.
+      // Meta's id space is global, so the id already identifies the connection.
+      const connection = await this.prisma.channelConnection.findFirst({
+        where: { externalAccountId: event.externalAccountId },
       });
 
       if (!connection) {
@@ -101,7 +103,7 @@ export class ChannelsService {
         continue;
       }
 
-      const wasProcessed = await this.ingestEvent(connection.id, connection.workspaceId, event);
+      const wasProcessed = await this.ingestEvent(connection, event);
       if (wasProcessed) {
         result.accepted++;
       } else {
@@ -119,10 +121,10 @@ export class ChannelsService {
    * without a corresponding published event, or vice versa.
    */
   private async ingestEvent(
-    channelConnectionId: string,
-    workspaceId: string,
+    connection: { id: string; workspaceId: string; provider: ChannelProvider },
     event: NormalizedInboundMessage,
   ): Promise<boolean> {
+    const { id: channelConnectionId, workspaceId, provider } = connection;
     const payloadHash = crypto.createHash("sha256").update(JSON.stringify(event.raw)).digest("hex");
     let contactCreated = false;
     let createdContactId: string | null = null;
@@ -133,13 +135,13 @@ export class ChannelsService {
           data: {
             workspaceId,
             channelConnectionId,
-            provider: this.metaAdapter.provider,
+            provider,
             externalEventId: event.externalEventId,
             payloadHash,
           },
         });
 
-        const { contactId, wasCreated } = await this.resolveOrCreateContact(tx, workspaceId, event);
+        const { contactId, wasCreated } = await this.resolveOrCreateContact(tx, workspaceId, provider, event);
         contactCreated = wasCreated;
         createdContactId = wasCreated ? contactId : null;
 
@@ -175,7 +177,7 @@ export class ChannelsService {
         action: "contact.created_from_webhook",
         targetType: "Contact",
         targetId: createdContactId,
-        metadata: { provider: this.metaAdapter.provider, externalId: event.senderExternalId },
+        metadata: { provider, externalId: event.senderExternalId },
       });
     }
 
@@ -185,13 +187,14 @@ export class ChannelsService {
   private async resolveOrCreateContact(
     tx: Prisma.TransactionClient,
     workspaceId: string,
+    provider: ChannelProvider,
     event: NormalizedInboundMessage,
   ): Promise<{ contactId: string; wasCreated: boolean }> {
     const existingIdentity = await tx.contactIdentity.findUnique({
       where: {
         workspaceId_channel_externalId: {
           workspaceId,
-          channel: this.metaAdapter.provider,
+          channel: provider,
           externalId: event.senderExternalId,
         },
       },
@@ -208,7 +211,7 @@ export class ChannelsService {
       data: {
         contactId: created.id,
         workspaceId,
-        channel: this.metaAdapter.provider,
+        channel: provider,
         externalId: event.senderExternalId,
         displayName: event.senderDisplayName,
       },

@@ -39,8 +39,12 @@ export class MetaOAuthService {
     }
 
     const [page] = pages;
+    // What we get from /me/accounts is a Facebook Page (Page id + Page access
+    // token), so the connection is MESSENGER. An Instagram account linked to
+    // the Page has its own IG business account id and would be a separate
+    // connection - out of scope for the single-Page automatic flow.
     return this.channelsService.connect(workspaceId, actorUserId, {
-      provider: ChannelProvider.INSTAGRAM,
+      provider: ChannelProvider.MESSENGER,
       externalAccountId: page.id,
       displayName: page.name,
       accessToken: page.access_token,
@@ -55,7 +59,7 @@ export class MetaOAuthService {
       code,
     });
     const body = await this.callGraphApi(`/oauth/access_token?${params.toString()}`);
-    return body.access_token as string;
+    return this.requireAccessToken(body);
   }
 
   private async exchangeForLongLivedToken(shortLivedToken: string): Promise<string> {
@@ -66,7 +70,14 @@ export class MetaOAuthService {
       fb_exchange_token: shortLivedToken,
     });
     const body = await this.callGraphApi(`/oauth/access_token?${params.toString()}`);
-    return body.access_token as string;
+    return this.requireAccessToken(body);
+  }
+
+  private requireAccessToken(body: any): string {
+    if (typeof body?.access_token !== "string" || body.access_token.length === 0) {
+      throw new BadRequestException("Meta OAuth request failed: response did not include an access token");
+    }
+    return body.access_token;
   }
 
   private async listPages(userAccessToken: string): Promise<MetaPage[]> {

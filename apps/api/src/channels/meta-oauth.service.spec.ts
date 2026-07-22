@@ -39,12 +39,24 @@ describe("MetaOAuthService.connectFromCode", () => {
     expect(String(fetchSpy.mock.calls[2][0])).toContain("/me/accounts?access_token=long-lived");
 
     expect(channelsService.connect).toHaveBeenCalledWith("ws-1", "user-1", {
-      provider: ChannelProvider.INSTAGRAM,
+      // A Facebook Page (Page id + Page token) from /me/accounts is a Messenger
+      // connection - Instagram would carry the IG business account id instead.
+      provider: ChannelProvider.MESSENGER,
       externalAccountId: "page-1",
       displayName: "Acme Support",
       accessToken: "page-token",
     });
     expect(result).toEqual({ id: "conn-1", status: "ACTIVE" });
+  });
+
+  it("rejects when the token exchange responds ok but without an access token", async () => {
+    const { service, channelsService } = buildService();
+    jest.spyOn(global, "fetch").mockResolvedValueOnce(jsonResponse({ token_type: "bearer" }));
+
+    await expect(service.connectFromCode("ws-1", "user-1", "auth-code", "https://app.example/callback")).rejects.toThrow(
+      "did not include an access token",
+    );
+    expect(channelsService.connect).not.toHaveBeenCalled();
   });
 
   it("rejects with a clear error when no Page is found", async () => {
